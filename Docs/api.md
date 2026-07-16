@@ -1,0 +1,71 @@
+# REST API
+
+Local-only Express API (`127.0.0.1:8210`), no auth (single-user tool). All bodies JSON.
+
+## Scanning
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/scan` | Start a market scan (background; 409 if one is running). |
+| `GET /api/scan/status` | `{running, step?}` + the last run summary/log. |
+| `GET /api/runs` | Recent scan runs. |
+
+## Recommendations
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/recommendations[?status=]` | List (with targets, options play, outcome, R:R, earnings chip data). |
+| `GET /api/recommendations/:id` | Full detail including the input snapshot. |
+| `POST /api/recommendations/:id/take` | Shares: `{qty, entry_price}`. Options play: `{instrument:"option", qty(contracts), entry_price(premium/share)}`. |
+| `POST /api/recommendations/:id/dismiss` | Close an open/tracking rec. |
+
+## Trades
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/trades[?status=open|closed]` | List; open rows include live last price, unrealized P&L (options ×100 off the chain mid), days-to-expiry, suggested stop, health verdict. |
+| `POST /api/trades` | Manual trade. Options: `asset_type:"option"` + `option_details:{type,strike,expiry}`. |
+| `PATCH /api/trades/:id` | Update the plan: `{stop_loss?, targets?}` (used by Apply-suggested-stop). |
+| `POST /api/trades/:id/exit` | Record a partial/full exit `{price, qty, reason}`; closes at zero qty. |
+| `POST /api/trades/health-check[?id=]` | AI health verdicts for all (or one) open position(s). |
+
+## Market data
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/chart/:symbol?days=` | Candles + indicator series + latest snapshot (accepts `BTC`, `bitcoin`, `AAPL`…). |
+| `GET /api/quote/:symbol` | Live quote (same symbol resolution). |
+| `GET /api/search?q=` | Symbol/company search. |
+| `GET /api/market` | Dashboard snapshot: indexes, BTC/ETH, sentiment, headlines. |
+| `GET /api/whales` | Smart-money snapshot. |
+
+## Watchlist
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/watchlist` | Watched symbols with live prices + alert state. |
+| `POST /api/watchlist` | Add: `{symbol, alert_above?, alert_below?, note?}` (any spelling — resolver applies). |
+| `PATCH /api/watchlist/:id` | Update alert levels/note (re-arms fired alerts). |
+| `DELETE /api/watchlist/:id` | Remove. |
+
+## Analysis extras
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/recommendations/:id/revalidate` | AI re-checks an open rec against current data → valid / adjust / withdraw. |
+| `GET /api/briefing` · `POST /api/briefing` | Latest daily AI briefing / generate one now. |
+| `POST /api/backtest` | Simulate your indicator thresholds over the past year: `{symbols?, min_signals?}`. |
+| `GET /api/portfolio/concentration` | Sector/asset concentration warnings for open positions. |
+| `GET /api/export/trades.csv` · `/api/export/recommendations.csv` | CSV downloads. |
+
+## AI
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/advisor-chat[?stream=1]` | Tool-calling chat. Non-streamed → `{reply, trace}`; `?stream=1` → NDJSON events (`tools`/`token`/`reset`/`done`). |
+| `POST /api/ai/test` | Round-trip test of endpoint/model/key. |
+| `POST /api/ai/models` | List models from an OpenAI-compatible endpoint (chat-capable filtered). |
+
+## Settings & system
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/settings` | All settings (secrets masked as `•••`). |
+| `PUT /api/settings/:block` | Replace one block (`ai`, `preferences`, `indicators`, `providers`, `schedule`, `notifications`). Sending `•••` keeps the stored secret. |
+| `GET/PUT /api/db/config` | DB connection (ADVISOR_CONFIG.json); requires `--init-db` + restart to switch. |
+| `POST /api/notify/test` | Send a test webhook notification. |
+| `GET /api/performance` | Success-rate stats (recs + your trades). |
+| `GET /api/events?limit=` | Activity feed (also drives browser notifications). |
+| `GET /healthz` | Liveness. |

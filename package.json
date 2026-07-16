@@ -1,0 +1,20 @@
+{
+  "name": "investment-advisor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI-powered stock & crypto trading advisor — market scanning, technical analysis, news/sentiment/whale tracking, and fully-logged recommendations. Local-first: SQLite or MySQL, any OpenAI-compatible model (OpenAI, Ollama, LiteLLM, LM Studio).",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "init-db": "node scripts/init-db.js",
+    "reset-db": "node scripts/init-db.js --reset"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.0",
+    "express": "^4.21.1",
+    "lightweight-charts": "^4.2.0",
+    "mysql2": "^3.11.5",
+    "rss-parser": "^3.13.0",
+    "yahoo-finance2": "2.13.3"
+  }
+}

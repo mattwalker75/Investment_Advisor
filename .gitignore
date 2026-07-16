@@ -1,0 +1,8 @@
+# Machine-local files. ADVISOR_CONFIG.json holds the DB connection (may contain MySQL
+# credentials) — commit ADVISOR_CONFIG_template.json instead. data/ holds the SQLite
+# database, pid, and logs; the app recreates it on setup.
+ADVISOR_CONFIG.json
+data/
+node_modules/
+*.log
+.DS_Store

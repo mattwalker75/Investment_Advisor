@@ -1,0 +1,1279 @@
+"use strict";
+/* Investment Advisor — frontend. Plain JS, no framework: tabs, dashboard, recommendation
+   cards, candlestick charts (lightweight-charts) with opt-in indicator overlays, trade
+   tracking, performance stats, and the settings forms. */
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || `${r.status}`);
+  return d;
+}
+const fmtP = (v, dp) => v == null ? "—" : Number(v).toLocaleString("en-US", { minimumFractionDigits: dp ?? (v >= 100 ? 2 : v >= 1 ? 2 : 4), maximumFractionDigits: dp ?? (v >= 100 ? 2 : v >= 1 ? 2 : 4) });
+const fmtPct = (v) => v == null ? "—" : (v > 0 ? "+" : "") + Number(v).toFixed(2) + "%";
+const cls = (v) => (v == null ? "" : v >= 0 ? "up" : "down");
+const fmtDT = (ts) => new Date(Number(ts)).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+const ago = (ts) => {
+  const s = (Date.now() - ts) / 1000;
+  if (s < 90) return "just now";
+  if (s < 3600) return Math.round(s / 60) + "m ago";
+  if (s < 86400) return Math.round(s / 3600) + "h ago";
+  return Math.round(s / 86400) + "d ago";
+};
+
+/* ---------- tabs ---------- */
+document.querySelectorAll("#tabs .tab").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("#tabs .tab").forEach((x) => x.classList.toggle("active", x === b));
+  document.querySelectorAll("main .panel").forEach((p) => p.classList.toggle("active", p.id === "panel-" + b.dataset.tab));
+  const load = { dashboard: loadDashboard, recs: loadRecs, charts: ensureChart, watchlist: loadWatchlist, trades: loadTrades, performance: loadPerformance, settings: loadSettings }[b.dataset.tab];
+  if (load) load();
+}));
+
+/* ---------- topbar: market strip + scan ---------- */
+const MKT_LABELS = { SPY: "S&P 500", QQQ: "NASDAQ 100", DIA: "DOW", "BTC-USD": "BTC", "ETH-USD": "ETH" };
+async function loadMarketStrip() {
+  try {
+    const d = await api("/api/market");
+    $("market-strip").innerHTML = Object.entries(d.quotes).map(([s, q]) => q ? `
+      <div class="mkt"><div class="s">${MKT_LABELS[s] || s}</div>
+        <div class="p">${fmtP(q.price)}</div>
+        <div class="c ${cls(q.change_pct)}">${fmtPct(q.change_pct)}</div></div>` : "").join("");
+    window._market = d;
+    renderSentiment(d.sentiment);
+    renderNews(d.headlines);
+  } catch (_) { /* strip is decorative — never block the app on it */ }
+}
+
+let scanPoll = null;
+function setScanUI(running) {
+  $("scan-btn").disabled = running;
+  const d = $("dash-scan-link");
+  if (d) { d.disabled = running; d.textContent = running ? "⏳ Scanning…" : "Scan now"; }
+}
+$("scan-btn").addEventListener("click", startScan);
+async function startScan() {
+  try { await api("/api/scan", { method: "POST" }); } catch (e) { alert(e.message); return; }
+  setScanUI(true);
+  pollScan();
+}
+function pollScan() {
+  clearInterval(scanPoll);
+  scanPoll = setInterval(async () => {
+    try {
+      const st = await api("/api/scan/status");
+      if (st.running) {
+        $("scan-sub").textContent = "⏳ scanning… " + (st.step || "");
+        setScanUI(true);
+      } else {
+        clearInterval(scanPoll);
+        setScanUI(false);
+        const last = st.last;
+        $("scan-sub").innerHTML = last
+          ? (last.status === "done"
+              ? `last scan: ${ago(last.finished_at)} · ${last.recs_count} rec(s) from ${last.universe_count} symbols · <span id="db-badge">${dbBadge}</span>`
+              : `last scan <span class="down">failed</span>: ${esc((last.error || "").slice(0, 80))}`)
+          : `AI market scanner · <span id="db-badge">${dbBadge}</span>`;
+        loadRecs(); loadDashboard();
+      }
+    } catch (_) {}
+  }, 1500);
+}
+$("dash-scan-link") && $("dash-scan-link").addEventListener("click", startScan);
+
+/* ---------- dashboard ---------- */
+function renderSentiment(s) {
+  if (!s) return;
+  const g = (label, fg) => fg ? `
+    <div class="gauge"><div class="g-val">${fg.value}</div>
+      <div class="g-lab">${label} — ${esc(fg.label || "")}${fg.yesterday != null ? ` (prev ${fg.yesterday})` : ""}</div>
+      <div class="bar"><i style="left:${Math.min(98, Math.max(0, fg.value))}%"></i></div></div>`
+    : `<div class="gauge"><div class="g-val">—</div><div class="g-lab">${label} unavailable</div></div>`;
+  $("senti-row").innerHTML = g("Stocks Fear & Greed", s.stocks_fear_greed) + g("Crypto Fear & Greed", s.crypto_fear_greed);
+}
+$("news-ai-review").addEventListener("click", async () => {
+  const btn = $("news-ai-review"), note = $("news-ai-note");
+  btn.disabled = true; note.textContent = "AI grading…";
+  try {
+    const r = await api("/api/news/ai-review", { method: "POST" });
+    renderNews(r.headlines);
+    note.textContent = `✓ ${r.reviewed} graded, ${r.changed} changed`;
+  } catch (e) { note.textContent = "✗ " + e.message.slice(0, 60); }
+  finally { btn.disabled = false; setTimeout(() => { note.textContent = ""; }, 8000); }
+});
+
+function renderNews(headlines) {
+  if (!headlines) return;
+  $("dash-news").innerHTML = (headlines || []).slice(0, 12).map((h) =>
+    `<a class="${h.sentiment || "neu"}" href="${esc(h.link)}" target="_blank" rel="noopener"><span class="src">${esc(h.source)} · ${ago(h.published_at)}${h.ai_reviewed ? " · 🤖" : ""}</span>${esc(h.title)}</a>`).join("") || '<div class="hint">No headlines.</div>';
+}
+async function loadBriefing() {
+  try {
+    const b = await api("/api/briefing");
+    if (b && b.text) { $("briefing-body").innerHTML = mdLite(b.text); $("briefing-when").textContent = ago(b.at); }
+  } catch (_) {}
+}
+$("briefing-run").addEventListener("click", async () => {
+  $("briefing-run").disabled = true; $("briefing-when").textContent = "generating…";
+  try { const r = await api("/api/briefing", { method: "POST" }); $("briefing-body").innerHTML = mdLite(r.text); $("briefing-when").textContent = "just now"; }
+  catch (e) { $("briefing-when").textContent = "✗ " + e.message; }
+  finally { $("briefing-run").disabled = false; }
+});
+
+async function loadDashboard() {
+  loadMarketStrip();
+  loadBriefing();
+  try {
+    const p = await api("/api/performance");
+    const R = p.recommendations;
+    $("success-tiles").innerHTML = R.finished ? `
+      <div class="tile"><div class="v ${R.win_rate >= 50 ? "up" : "down"}">${R.win_rate}%</div><div class="l">win rate</div></div>
+      <div class="tile"><div class="v ${cls(R.avg_pnl_pct)}">${fmtPct(R.avg_pnl_pct)}</div><div class="l">avg outcome</div></div>
+      <div class="tile"><div class="v">${R.finished}</div><div class="l">graded</div></div>
+      <div class="tile"><div class="v">${R.tracking}</div><div class="l">in progress</div></div>
+      <div class="tile"><div class="v">${R.open}</div><div class="l">awaiting entry</div></div>`
+      : '<div class="hint">No finished recommendations yet — the system grades itself as ideas play out.</div>';
+  } catch (_) {}
+  try {
+    const recs = await api("/api/recommendations");
+    const active = recs.filter((r) => ["open", "tracking"].includes(r.status));
+    $("recs-badge").hidden = !active.length;
+    $("recs-badge").textContent = active.length;
+    $("dash-recs").innerHTML = recs.slice(0, 6).map(recRowSmall).join("") || '<div class="hint">No recommendations yet — run a scan.</div>';
+  } catch (_) {}
+  try {
+    const evs = await api("/api/events?limit=12");
+    $("dash-events").innerHTML = evs.map((e) => `<div class="ev"><span class="t">${ago(e.at)}</span>${esc(e.message)}</div>`).join("") || '<div class="hint">Nothing yet.</div>';
+  } catch (_) {}
+}
+function recRowSmall(r) {
+  return `<div class="ev"><span class="t">${ago(r.created_at)}</span>
+    <span class="side ${r.side}">${r.side.toUpperCase()}</span>
+    <b class="mono"> ${esc(r.symbol)}</b> ${assetBadge(r)} · entry ${fmtP(r.entry_low)}–${fmtP(r.entry_high)} · stop ${fmtP(r.stop_loss)}
+    <span class="chipstat ${r.status}">${r.status}</span>${r.taken ? ' <span class="taken-flag">✓ taken</span>' : ""}</div>`;
+}
+
+/* ---------- position sizing (advisory): risk X% of account across entry->stop ---------- */
+let appSettings = null;   // public settings snapshot (risk numbers for sizing math)
+async function loadAppSettings() { try { appSettings = await api("/api/settings"); } catch (_) {} }
+function positionSize(r) {
+  if (!appSettings) return null;
+  const risk = appSettings.preferences.risk;
+  const entryMid = (r.entry_low + r.entry_high) / 2;
+  const perUnit = Math.abs(entryMid - r.stop_loss);
+  if (!perUnit || !entryMid) return null;
+  const riskAmt = (risk.account_size * risk.risk_per_trade_pct) / 100;
+  let qty = riskAmt / perUnit;
+  qty = r.asset_type === "stock" ? Math.floor(qty) : +qty.toFixed(4);
+  if (!qty) return null;
+  return { qty, cost: +(qty * entryMid).toFixed(2), risk_amount: +riskAmt.toFixed(2), entry_mid: entryMid };
+}
+
+/* ---------- recommendations ---------- */
+let recsFilter = "active";
+document.querySelectorAll("#recs-filter button").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("#recs-filter button").forEach((x) => x.classList.toggle("active", x === b));
+  recsFilter = b.dataset.f; loadRecs();
+}));
+let recsTypeFilter = "all";   // 'all' | 'stock' | 'option' | 'crypto'
+document.querySelectorAll("#recs-type-filter button").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("#recs-type-filter button").forEach((x) => x.classList.toggle("active", x === b));
+  recsTypeFilter = b.dataset.t; loadRecs();
+}));
+// Refresh prices + shadow-tracking pass — never touches strategy levels.
+async function refreshRecPrices() {
+  const btn = $("recs-refresh");
+  btn.disabled = true; btn.textContent = "↻ refreshing…";
+  try { await api("/api/recommendations/refresh", { method: "POST" }); await loadRecs(); }
+  catch (e) { alert(e.message); }
+  finally { btn.disabled = false; btn.textContent = "↻ Refresh prices"; }
+}
+
+async function loadRecs() {
+  const all = await api("/api/recommendations").catch(() => []);
+  let list = recsFilter === "all" ? all
+    : recsFilter === "finished" ? all.filter((r) => ["stopped", "target_hit", "expired", "closed"].includes(r.status))
+    : all.filter((r) => ["open", "tracking"].includes(r.status));
+  if (recsTypeFilter !== "all") list = list.filter((r) => tradeClass(r) === recsTypeFilter);
+  $("recs-count").textContent = `${list.length} recommendation(s)`;
+  $("recs-list").innerHTML = list.map(recCard).join("") || '<div class="hint">Nothing here. Run a market scan to generate ideas.</div>';
+  list.forEach((r) => {
+    const el = $("rec-" + r.id);
+    el.querySelector(".rec-head").addEventListener("click", () => el.classList.toggle("open"));
+    const takeBtn = el.querySelector(".take:not(.take-option)");
+    if (takeBtn) takeBtn.addEventListener("click", (e) => { e.stopPropagation(); takeTradeModal(r); });
+    const takeOpt = el.querySelector(".take-option");
+    if (takeOpt) takeOpt.addEventListener("click", (e) => { e.stopPropagation(); takeOptionModal(r); });
+    const dis = el.querySelector(".dismiss");
+    if (dis) dis.addEventListener("click", async (e) => { e.stopPropagation(); await api(`/api/recommendations/${r.id}/dismiss`, { method: "POST" }); loadRecs(); });
+    const ch = el.querySelector(".to-chart");
+    if (ch) ch.addEventListener("click", (e) => { e.stopPropagation(); openChart(r.asset_type === "crypto" && !r.symbol.includes("-") ? r.symbol + "-USD" : r.symbol, { entry_low: r.entry_low, entry_high: r.entry_high, stop_loss: r.stop_loss, targets: r.targets }); });
+    const cp = el.querySelector(".complete-btn");
+    if (cp) cp.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try { const v = await api(`/api/recommendations/${r.id}/complete`, { method: "POST" });
+        if (v.pnl_pct != null) alert(`Completed — shadow outcome ${v.pnl_pct > 0 ? "+" : ""}${v.pnl_pct}%`);
+        loadRecs(); loadDashboard(); }
+      catch (err) { alert(err.message); }
+    });
+    const rv = el.querySelector(".revalidate");
+    if (rv) rv.addEventListener("click", async (e) => {
+      e.stopPropagation(); rv.disabled = true; rv.textContent = "♻ checking…";
+      try { const v = await api(`/api/recommendations/${r.id}/revalidate`, { method: "POST" });
+        alert(`${v.verdict.toUpperCase()}: ${v.note}`); loadRecs(); }
+      catch (err) { alert(err.message); rv.disabled = false; rv.textContent = "♻ Re-validate"; }
+    });
+  });
+}
+// Trade class: what you'd actually be trading. A stock rec with an options play is an OPTION idea.
+function tradeClass(r) { return r.options_play ? "option" : r.asset_type === "crypto" ? "crypto" : "stock"; }
+const TRADE_CLASS_LABEL = { stock: "📈 STOCK", option: "🧾 OPTION", crypto: "₿ CRYPTO" };
+function assetBadge(r) { const c = tradeClass(r); return `<span class="asset-badge ${c}">${TRADE_CLASS_LABEL[c]}</span>`; }
+function recCard(r) {
+  const outcome = r.outcome || {};
+  const pnl = outcome.pnl_pct;
+  // Earnings-inside-horizon warning (extracted from the rec's input snapshot at scan time).
+  const earn = r.earnings;
+  return `<div class="rec" id="rec-${r.id}">
+    <div class="rec-head">
+      <span class="sym">${esc(r.symbol)}</span>
+      ${assetBadge(r)}
+      <span class="hint">${esc(r.name || "")}${r.sector ? " · " + esc(r.sector) : ""}</span>
+      <span class="chipstat" title="where this idea came from">${r.source === "chat" ? "💬 chat" : "🔍 scan"}</span>
+      ${(r.outcome && r.outcome.revalidation) ? `<span class="chipstat ${r.outcome.revalidation.verdict === "valid" ? "tracking" : ""}" title="${esc(r.outcome.revalidation.note || "")}">♻ ${esc(r.outcome.revalidation.verdict)} · ${ago(r.outcome.revalidation.at)}</span>` : ""}
+      ${earn && earn.days_away <= (r.horizon_max_days || 30) ? `<span class="chipstat" style="color:var(--amber)" title="earnings ${esc(earn.date)}">⚠ earnings ${earn.days_away}d</span>` : ""}
+      <span class="side ${r.side}">${r.side.toUpperCase()}</span>
+      <span class="chipstat ${r.status}">${r.status}${pnl != null ? ` ${fmtPct(pnl)}` : ""}</span>
+      ${r.taken ? '<span class="taken-flag">✓ taken</span>' : ""}
+      ${(() => {   // COMPLETE marker: stop hit, final target hit, expired, or user-completed
+        if (!["stopped", "target_hit", "expired", "closed"].includes(r.status)) return "";
+        const why = r.status === "stopped" ? "stop loss hit" : r.status === "target_hit" ? "final target hit"
+          : r.status === "expired" ? "entry window expired"
+          : (r.outcome && r.outcome.result === "completed_by_user") ? "completed by you"
+          : (r.outcome && r.outcome.result === "withdrawn") ? "withdrawn (re-validation)" : "dismissed";
+        return `<span class="chipstat complete ${r.status === "stopped" ? "stopped" : ""}" title="${why}">✔ COMPLETE · ${why}</span>`;
+      })()}
+      ${r.risk_reward ? `<span class="chipstat" title="ladder-weighted reward vs entry-to-stop risk">R:R ${r.risk_reward}</span>` : ""}
+      <span class="conf">${fmtDT(r.created_at)} · Confidence: ${Math.round((r.confidence || 0) * 100)}%</span>
+    </div>
+    <div class="rec-body">
+      <div class="levels">
+        ${(() => {   // live price + in-zone status (the "can I act NOW?" box)
+          if (r.live_price == null || !["open", "tracking"].includes(r.status)) return `<div class="lvl"><div class="l">price @ rec</div><div class="v">${fmtP(r.current_price)}</div></div>`;
+          const lp = r.live_price, mid = (r.entry_low + r.entry_high) / 2;
+          const inZone = r.side === "buy" ? lp <= r.entry_high * 1.002 && lp >= r.entry_low * 0.99 : lp >= r.entry_low * 0.998 && lp <= r.entry_high * 1.01;
+          let zoneNote;
+          if (inZone) zoneNote = '<span class="inzone">IN ENTRY ZONE</span>';
+          else if (r.side === "buy" ? lp > r.entry_high : lp < r.entry_low) zoneNote = `<span class="hint">${fmtPct(Math.abs((lp - (r.side === "buy" ? r.entry_high : r.entry_low)) / mid) * 100).replace("+", "")} ${r.side === "buy" ? "above" : "below"} zone</span>`;
+          else zoneNote = `<span class="hint">${fmtPct(Math.abs((lp - (r.side === "buy" ? r.entry_low : r.entry_high)) / mid) * 100).replace("+", "")} past zone</span>`;
+          return `<div class="lvl"><div class="l">price now <span class="hint">(@rec ${fmtP(r.current_price)})</span></div><div class="v">${fmtP(lp)} ${zoneNote}</div></div>`;
+        })()}
+        <div class="lvl ${r.outcome && r.outcome.entry_hit_at ? "hit" : ""}"><div class="l">entry zone ${r.outcome && r.outcome.entry_hit_at ? "✓" : ""}</div><div class="v">${fmtP(r.entry_low)} – ${fmtP(r.entry_high)}</div></div>
+        ${(() => { const mid = (r.entry_low + r.entry_high) / 2; const pct = mid ? ((r.stop_loss - mid) / mid) * 100 : null;
+          return `<div class="lvl stop ${r.status === "stopped" ? "hit-stop" : ""}"><div class="l">stop loss ${r.status === "stopped" ? "✗ HIT" : ""}</div><div class="v">${fmtP(r.stop_loss)} <span class="hint">(${fmtPct(pct)})</span></div></div>`; })()}
+        ${(r.targets || []).map((t, i) => { const mid = (r.entry_low + r.entry_high) / 2; const pct = mid ? ((t.price - mid) / mid) * 100 : null;
+          const hit = r.outcome && (r.outcome.targets_hit || []).includes(t.price);
+          return `<div class="lvl tgt ${hit ? "hit" : ""}"><div class="l">target ${i + 1} · sell ${t.sell_pct}% ${hit ? "✓" : ""}</div><div class="v">${fmtP(t.price)} <span class="hint">(${fmtPct(pct)})</span></div></div>`; }).join("")}
+        <div class="lvl"><div class="l">est. duration</div><div class="v">${r.horizon_min_days}–${r.horizon_max_days}d${(() => {
+          if (r.status === "tracking" && r.outcome && r.outcome.entry_hit_at) { const d = Math.max(1, Math.round((Date.now() - r.outcome.entry_hit_at) / 86400000)); return ` <span class="hint">· day ${d}</span>`; }
+          if (r.status === "open" && r.expires_at) { const d = Math.ceil((Number(r.expires_at) - Date.now()) / 86400000); return d > 0 ? ` <span class="${d <= 2 ? "down" : "hint"}">· window closes ${d}d</span>` : ""; }
+          return ""; })()}</div></div>
+        ${(() => { const ps = positionSize(r); if (!ps) return "";
+          const reward = (r.targets || []).reduce((s2, t) => s2 + (t.sell_pct / 100) * Math.abs(t.price - ps.entry_mid) * ps.qty, 0);
+          return `<div class="lvl"><div class="l">suggested size · risk $${fmtP(ps.risk_amount, 0)}</div><div class="v">${ps.qty} ${r.asset_type === "stock" ? "sh" : "units"} ≈ $${fmtP(ps.cost, 0)} <span class="up">→ reward ≈ $${fmtP(reward, 0)}</span></div></div>`; })()}
+      </div>
+      ${(r.signals || []).length ? `<div class="sig-chips" title="the indicator signals the AI saw at recommendation time">${r.signals.slice(0, 6).map((x) => `<span>${esc(x)}</span>`).join("")}</div>` : ""}
+      ${r.options_play ? `<div class="opt-play"><span class="tag">OPTIONS PLAY</span> — <b>${esc(r.options_play.strategy.replace(/_/g, " "))}</b>
+        ${r.options_play.strikes && r.options_play.strikes.length ? " strike " + r.options_play.strikes.join("/") : ""}
+        exp ${esc(r.options_play.chain_expiry || r.options_play.expiry || "?")}
+        ${r.options_play.est_premium ? `<br>est. premium <b>$${fmtP(r.options_play.est_premium, 2)}</b>/sh ($${fmtP(r.options_play.est_premium * 100, 0)}/contract)` : ""}
+        ${r.options_play.breakeven ? ` · breakeven <b>${fmtP(r.options_play.breakeven)}</b>` : ""}
+        ${r.options_play.max_loss_per_contract ? ` · max loss <b class="down">$${fmtP(r.options_play.max_loss_per_contract, 0)}</b>/contract` : ""}
+        ${r.options_play.iv ? ` · IV ${r.options_play.iv}%` : ""}
+        <br>${esc(r.options_play.note || "")}</div>` : ""}
+      <div class="rationale">${esc(r.rationale)}</div>
+      ${outcome.entry_price ? `<div class="hint">shadow entry ${fmtP(outcome.entry_price)} ${outcome.targets_hit && outcome.targets_hit.length ? "· targets hit: " + outcome.targets_hit.map((p) => fmtP(p)).join(", ") : ""} ${outcome.last_price ? "· last " + fmtP(outcome.last_price) : ""}</div>` : ""}
+      <div class="rec-actions">
+        <button class="ghost to-chart">📈 Chart</button>
+        ${!r.taken && ["open", "tracking"].includes(r.status) ? '<button class="take">✅ I took this trade</button>' : ""}
+        ${!r.taken && r.options_play && ["open", "tracking"].includes(r.status) ? '<button class="take take-option" style="background:linear-gradient(180deg,#8b5cf6,#6d28d9)">🧾 Took the option</button>' : ""}
+        ${["open", "tracking"].includes(r.status) ? '<button class="ghost complete-btn" title="Mark this idea finished — a tracking idea is graded at the current price">✔ Complete</button>' : ""}
+        ${["open", "tracking"].includes(r.status) ? '<button class="ghost revalidate" title="AI re-checks this idea against current data">♻ Re-validate</button>' : ""}
+        ${["open", "tracking"].includes(r.status) ? '<button class="ghost dismiss">✖ Dismiss</button>' : ""}
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ---------- modal helpers ---------- */
+function modal(html) { $("modal-box").innerHTML = html; $("modal").hidden = false; }
+function closeModal() { $("modal").hidden = true; }
+$("modal").addEventListener("click", (e) => { if (e.target === $("modal")) closeModal(); });
+
+function takeTradeModal(r) {
+  const ps = positionSize(r);
+  modal(`<h3>Take trade — ${esc(r.symbol)}</h3>
+    <div class="hint">Log the fill you actually got; the advisor then tracks it against the plan (stop ${fmtP(r.stop_loss)}, ${(r.targets || []).length} target(s)).${ps ? `<br>Suggested size for your risk settings: <b>${ps.qty}</b> (risking ~$${fmtP(ps.risk_amount, 0)} if stopped).` : ""}</div>
+    <div class="frow"><label>Quantity</label><input id="m-qty" type="number" step="any" min="0" value="${ps ? ps.qty : ""}"></div>
+    <div class="frow"><label>Entry price</label><input id="m-price" type="number" step="any" value="${r.current_price || ""}"></div>
+    <div class="actions"><button class="ghost" onclick="document.getElementById('modal').hidden=true">Cancel</button>
+    <button class="primary" id="m-go">Open trade</button></div>`);
+  $("m-go").addEventListener("click", async () => {
+    try {
+      await api(`/api/recommendations/${r.id}/take`, { method: "POST", body: JSON.stringify({ qty: Number($("m-qty").value), entry_price: Number($("m-price").value) }) });
+      closeModal(); loadRecs(); loadTrades();
+    } catch (e) { alert(e.message); }
+  });
+}
+
+// Take the recommendation's OPTIONS play (contracts + premium per share).
+function takeOptionModal(r) {
+  const p = r.options_play || {};
+  modal(`<h3>Take option — ${esc(r.symbol)}</h3>
+    <div class="hint"><b>${esc((p.strategy || "").replace(/_/g, " "))}</b> · strike ${p.strikes && p.strikes[0] ? fmtP(p.strikes[0]) : "?"} · exp ${esc(p.chain_expiry || p.expiry || "?")}
+      ${p.est_premium ? `<br>Est. premium $${fmtP(p.est_premium, 2)}/share ($${fmtP(p.est_premium * 100, 0)}/contract)` : ""}
+      ${p.max_loss_per_contract ? ` · max loss $${fmtP(p.max_loss_per_contract, 0)}/contract` : ""}</div>
+    <div class="frow"><label>Contracts</label><input id="m-qty" type="number" step="1" min="1" value="1"></div>
+    <div class="frow"><label>Premium paid<br><span class="hint">per share</span></label><input id="m-price" type="number" step="any" value="${p.est_premium || ""}"></div>
+    <div class="actions"><button class="ghost" onclick="document.getElementById('modal').hidden=true">Cancel</button>
+    <button class="primary" id="m-go">Open option trade</button></div>`);
+  $("m-go").addEventListener("click", async () => {
+    try {
+      await api(`/api/recommendations/${r.id}/take`, { method: "POST", body: JSON.stringify({ instrument: "option", qty: Number($("m-qty").value), entry_price: Number($("m-price").value) }) });
+      closeModal(); loadRecs(); loadTrades();
+    } catch (e) { alert(e.message); }
+  });
+}
+
+
+/* ---------- watchlist ---------- */
+async function loadWatchlist() {
+  const rows = await api("/api/watchlist").catch(() => []);
+  $("wl-list").innerHTML = rows.length ? `<table class="grid"><thead><tr>
+      <th>Symbol</th><th>Name</th><th>Price</th><th>Day</th><th>Alert above</th><th>Alert below</th><th></th>
+    </tr></thead><tbody>${rows.map((w) => `<tr>
+      <td class="mono"><b>${esc(w.symbol)}</b> <span class="hint">${w.asset_type}</span></td>
+      <td class="hint">${esc(w.name || "")}</td>
+      <td class="mono">${fmtP(w.price)}</td>
+      <td class="mono ${cls(w.change_pct)}">${fmtPct(w.change_pct)}</td>
+      <td class="mono">${w.alert_above != null ? fmtP(w.alert_above) + (w.alerts_fired.above_at ? ' <span class="up">✓fired</span>' : "") : "—"}</td>
+      <td class="mono">${w.alert_below != null ? fmtP(w.alert_below) + (w.alerts_fired.below_at ? ' <span class="down">✓fired</span>' : "") : "—"}</td>
+      <td><button class="ghost small" data-wlchart="${esc(w.symbol)}">📈</button>
+          <button class="ghost small" data-wledit="${w.id}" data-above="${w.alert_above ?? ""}" data-below="${w.alert_below ?? ""}">✎</button>
+          <button class="ghost small" data-wldel="${w.id}">✖</button></td></tr>`).join("")}</tbody></table>`
+    : '<div class="hint">Nothing watched yet. Add a symbol above — it will join every scan with priority and alert you at your levels.</div>';
+  document.querySelectorAll("[data-wldel]").forEach((b) => b.addEventListener("click", async () => { await api("/api/watchlist/" + b.dataset.wldel, { method: "DELETE" }); loadWatchlist(); }));
+  document.querySelectorAll("[data-wlchart]").forEach((b) => b.addEventListener("click", () => openChart(b.dataset.wlchart)));
+  document.querySelectorAll("[data-wledit]").forEach((b) => b.addEventListener("click", () => {
+    modal(`<h3>Edit alerts</h3>
+      <div class="frow"><label>Alert above</label><input id="m-above" type="number" step="any" value="${b.dataset.above}"></div>
+      <div class="frow"><label>Alert below</label><input id="m-below" type="number" step="any" value="${b.dataset.below}"></div>
+      <div class="hint">Changing a level re-arms its alert.</div>
+      <div class="actions"><button class="ghost" onclick="document.getElementById('modal').hidden=true">Cancel</button>
+      <button class="primary" id="m-go">Save</button></div>`);
+    $("m-go").addEventListener("click", async () => {
+      await api("/api/watchlist/" + b.dataset.wledit, { method: "PATCH", body: JSON.stringify({ alert_above: $("m-above").value || null, alert_below: $("m-below").value || null }) });
+      closeModal(); loadWatchlist();
+    });
+  }));
+}
+$("wl-add").addEventListener("click", async () => {
+  const sym = $("wl-symbol").value.trim();
+  if (!sym) return;
+  try {
+    await api("/api/watchlist", { method: "POST", body: JSON.stringify({ symbol: sym, alert_above: $("wl-above").value || null, alert_below: $("wl-below").value || null }) });
+    $("wl-symbol").value = ""; $("wl-above").value = ""; $("wl-below").value = "";
+    loadWatchlist();
+  } catch (e) { alert(e.message); }
+});
+$("wl-symbol").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("wl-add").click(); } });
+
+/* ---------- trades ---------- */
+// On-demand AI health check of every open position.
+$("health-check-btn").addEventListener("click", async () => {
+  const btn = $("health-check-btn"), noteEl = $("health-note");
+  btn.disabled = true; noteEl.textContent = "AI reviewing positions…";
+  try {
+    const r = await api("/api/trades/health-check", { method: "POST" });
+    const attention = r.verdicts.filter((v) => v.action !== "hold");
+    noteEl.textContent = r.checked
+      ? `✓ ${r.checked} reviewed — ${attention.length ? attention.length + " need attention" : "all healthy"}`
+      : "no open positions to review";
+    loadTrades(); loadDashboard();
+  } catch (e) { noteEl.textContent = "✗ " + e.message; }
+  finally { btn.disabled = false; setTimeout(() => { noteEl.textContent = ""; }, 8000); }
+});
+
+$("trade-add-btn").addEventListener("click", () => {
+  modal(`<h3>Log a manual trade</h3>
+    <div class="frow"><label>Symbol</label><input id="m-sym" placeholder="AAPL or BTC-USD" style="text-transform:uppercase"></div>
+    <div class="frow"><label>Type</label><select id="m-type"><option value="stock">stock</option><option value="crypto">crypto</option><option value="option">option</option></select></div>
+    <div id="m-optrows" hidden>
+      <div class="frow"><label>Call / Put</label><select id="m-otype"><option value="call">call</option><option value="put">put</option></select></div>
+      <div class="frow"><label>Strike</label><input id="m-strike" type="number" step="any"></div>
+      <div class="frow"><label>Expiry</label><input id="m-expiry" type="date"></div>
+    </div>
+    <div class="frow"><label>Side</label><select id="m-side"><option value="buy">buy (long)</option><option value="sell">sell (short)</option></select></div>
+    <div class="frow"><label id="m-qty-label">Quantity</label><input id="m-qty" type="number" step="any"></div>
+    <div class="frow"><label id="m-price-label">Entry price</label><input id="m-price" type="number" step="any"></div>
+    <div class="frow"><label>Stop loss</label><input id="m-stop" type="number" step="any" placeholder="optional (underlying price for options)"></div>
+    <div class="actions"><button class="ghost" onclick="document.getElementById('modal').hidden=true">Cancel</button>
+    <button class="primary" id="m-go">Log trade</button></div>`);
+  $("m-type").addEventListener("change", () => {
+    const isOpt = $("m-type").value === "option";
+    $("m-optrows").hidden = !isOpt;
+    $("m-qty-label").textContent = isOpt ? "Contracts" : "Quantity";
+    $("m-price-label").textContent = isOpt ? "Premium (per share)" : "Entry price";
+  });
+  $("m-go").addEventListener("click", async () => {
+    try {
+      const body = {
+        symbol: $("m-sym").value.trim().toUpperCase(), asset_type: $("m-type").value, side: $("m-side").value,
+        qty: Number($("m-qty").value), entry_price: Number($("m-price").value),
+        stop_loss: $("m-stop").value ? Number($("m-stop").value) : null,
+      };
+      if (body.asset_type === "option") body.option_details = { type: $("m-otype").value, strike: Number($("m-strike").value), expiry: $("m-expiry").value };
+      await api("/api/trades", { method: "POST", body: JSON.stringify(body) });
+      closeModal(); loadTrades();
+    } catch (e) { alert(e.message); }
+  });
+});
+
+function exitModal(t, remaining) {
+  modal(`<h3>Exit — ${esc(t.symbol)}</h3>
+    <div class="hint">Remaining position: ${remaining} @ entry ${fmtP(t.entry_price)}. Partial exits are fine — the trade closes when quantity reaches zero.</div>
+    <div class="frow"><label>Exit price</label><input id="m-price" type="number" step="any" value="${t.last_price || ""}"></div>
+    <div class="frow"><label>Quantity</label><input id="m-qty" type="number" step="any" value="${remaining}"></div>
+    <div class="frow"><label>Reason</label><select id="m-reason"><option>target</option><option>stop</option><option>manual</option></select></div>
+    <div class="actions"><button class="ghost" onclick="document.getElementById('modal').hidden=true">Cancel</button>
+    <button class="primary" id="m-go">Record exit</button></div>`);
+  $("m-go").addEventListener("click", async () => {
+    try {
+      await api(`/api/trades/${t.id}/exit`, { method: "POST", body: JSON.stringify({ price: Number($("m-price").value), qty: Number($("m-qty").value), reason: $("m-reason").value }) });
+      closeModal(); loadTrades(); loadDashboard();
+    } catch (e) { alert(e.message); }
+  });
+}
+
+async function loadTrades() {
+  const trades = await api("/api/trades").catch(() => []);
+  const open = trades.filter((t) => t.status === "open");
+  const closed = trades.filter((t) => t.status === "closed");
+  $("trades-badge").hidden = !open.length;
+  $("trades-badge").textContent = open.length;
+
+  $("trades-open").innerHTML = open.length ? `<table class="grid"><thead><tr>
+      <th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Last</th><th>Stop</th><th>Health</th><th>Unrealized</th><th>Opened</th><th></th>
+    </tr></thead><tbody>${open.map((t) => {
+      const sold = (t.exits || []).reduce((s, e) => s + (e.qty || 0), 0);
+      const remaining = t.qty - sold;
+      const od = t.option_details;
+      const sug = t.suggested_stop;
+      const h = t.health;
+      const hIcon = h ? ({ hold: "🟢", tighten_stop: "🟠", take_partial: "🟠", sell_now: "🔴" }[h.action] || "⚪") : "";
+      return `<tr>
+        <td class="mono"><b>${esc(t.symbol)}</b>${od ? ` <span class="hint">${fmtP(od.strike, 0)}${(od.type || "")[0] ? (od.type[0] || "").toUpperCase() : ""} ${esc(od.expiry || "")}</span>` : ""}${t.rec_id ? ' <span class="hint">· rec</span>' : ""}</td>
+        <td><span class="side ${t.side}">${t.side.toUpperCase()}</span></td>
+        <td class="mono">${remaining}${sold ? `<span class="hint">/${t.qty}</span>` : ""}</td>
+        <td class="mono">${fmtP(t.entry_price)}</td>
+        <td class="mono">${fmtP(t.last_price)}</td>
+        <td class="mono">${fmtP(t.stop_loss)} <button class="ghost small" data-editstop="${t.id}" title="Edit stop">✎</button>
+          ${sug ? `<br><span class="up" title="${esc(sug.basis)}">↑ ${fmtP(sug.price)}</span> <button class="ghost small" data-applystop="${t.id}" data-price="${sug.price}" title="Apply suggested stop (${esc(sug.basis)})">Apply</button>` : ""}</td>
+        <td title="${h ? esc(h.note || "") : "no health check yet"}">${hIcon}${h ? ` <span class="hint">${esc((h.action || "").replace(/_/g, " "))}</span>` : '<span class="hint">—</span>'}</td>
+        <td class="mono ${cls(t.unrealized_pnl)}">${t.unrealized_pnl != null ? `$${fmtP(t.unrealized_pnl, 2)} (${fmtPct(t.unrealized_pnl_pct)})` : "—"}</td>
+        <td class="hint">${ago(t.entry_at)}</td>
+        <td><button class="ghost small" data-tchart="${t.id}" title="Chart with your plan drawn">📈</button>
+            <button class="ghost small" data-exit="${t.id}">Exit…</button></td></tr>`;
+    }).join("")}</tbody></table>` : '<div class="hint">No open positions. Take a recommendation or log a manual trade.</div>';
+
+  $("trades-closed").innerHTML = closed.length ? `<table class="grid"><thead><tr>
+      <th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>P&L</th><th>Closed</th>
+    </tr></thead><tbody>${closed.map((t) => `<tr>
+      <td class="mono"><b>${esc(t.symbol)}</b></td>
+      <td><span class="side ${t.side}">${t.side.toUpperCase()}</span></td>
+      <td class="mono">${t.qty}</td>
+      <td class="mono">${fmtP(t.entry_price)}</td>
+      <td class="mono ${cls(t.pnl)}">$${fmtP(t.pnl, 2)} (${fmtPct(t.pnl_pct)})</td>
+      <td class="hint">${t.closed_at ? ago(t.closed_at) : "—"}</td></tr>`).join("")}</tbody></table>`
+    : '<div class="hint">No closed trades yet.</div>';
+
+  document.querySelectorAll("[data-exit]").forEach((b) => b.addEventListener("click", () => {
+    const t = open.find((x) => x.id === Number(b.dataset.exit));
+    const sold = (t.exits || []).reduce((s, e) => s + (e.qty || 0), 0);
+    exitModal(t, t.qty - sold);
+  }));
+  document.querySelectorAll("[data-tchart]").forEach((b) => b.addEventListener("click", () => {
+    const t = open.find((x) => x.id === Number(b.dataset.tchart));
+    const sym = t.asset_type === "crypto" && !t.symbol.includes("-") ? t.symbol + "-USD" : t.symbol;
+    openChart(sym, { entry: t.entry_price, stop_loss: t.stop_loss, targets: t.targets || [] });
+  }));
+  // Portfolio concentration warnings (correlated-risk check).
+  api("/api/portfolio/concentration").then((c) => {
+    $("concentration-banner").innerHTML = (c.warnings || []).length
+      ? `<div class="warn-banner">${c.warnings.map((w) => esc(w)).join("<br>")}</div>` : "";
+  }).catch(() => {});
+  // Apply the advisor's suggested stop with one click.
+  document.querySelectorAll("[data-applystop]").forEach((b) => b.addEventListener("click", async () => {
+    try { await api(`/api/trades/${b.dataset.applystop}`, { method: "PATCH", body: JSON.stringify({ stop_loss: Number(b.dataset.price) }) }); loadTrades(); }
+    catch (e) { alert(e.message); }
+  }));
+  // Manual stop edit.
+  document.querySelectorAll("[data-editstop]").forEach((b) => b.addEventListener("click", () => {
+    const t = open.find((x) => x.id === Number(b.dataset.editstop));
+    modal(`<h3>Edit stop — ${esc(t.symbol)}</h3>
+      <div class="hint">Entry ${fmtP(t.entry_price)} · last ${fmtP(t.last_price)}${t.suggested_stop ? ` · advisor suggests <b>${fmtP(t.suggested_stop.price)}</b> (${esc(t.suggested_stop.basis)})` : ""}</div>
+      <div class="frow"><label>Stop loss</label><input id="m-stop" type="number" step="any" value="${t.stop_loss ?? ""}"></div>
+      <div class="actions"><button class="ghost" onclick="document.getElementById('modal').hidden=true">Cancel</button>
+      <button class="primary" id="m-go">Save</button></div>`);
+    $("m-go").addEventListener("click", async () => {
+      try { await api(`/api/trades/${t.id}`, { method: "PATCH", body: JSON.stringify({ stop_loss: Number($("m-stop").value) }) }); closeModal(); loadTrades(); }
+      catch (e) { alert(e.message); }
+    });
+  }));
+}
+
+/* ---------- performance ---------- */
+async function loadPerformance() {
+  const p = await api("/api/performance").catch(() => null);
+  if (!p) return;
+  const R = p.recommendations, T = p.trades;
+  $("perf-rec-tiles").innerHTML = `
+    <div class="tile"><div class="v">${R.total}</div><div class="l">total recs</div></div>
+    <div class="tile"><div class="v ${R.win_rate >= 50 ? "up" : R.win_rate == null ? "" : "down"}">${R.win_rate != null ? R.win_rate + "%" : "—"}</div><div class="l">win rate</div></div>
+    <div class="tile"><div class="v ${cls(R.avg_pnl_pct)}">${fmtPct(R.avg_pnl_pct)}</div><div class="l">avg outcome</div></div>
+    <div class="tile"><div class="v up">${R.wins}</div><div class="l">wins</div></div>
+    <div class="tile"><div class="v down">${R.finished - R.wins}</div><div class="l">losses</div></div>
+    <div class="tile"><div class="v">${R.expired}</div><div class="l">expired</div></div>
+    <div class="tile"><div class="v">${R.tracking}</div><div class="l">in progress</div></div>`;
+  $("perf-rec-recent").innerHTML = R.recent_finished.length ? `<table class="grid"><thead><tr>
+      <th>Symbol</th><th>Side</th><th>Result</th><th>Outcome</th><th>Taken?</th></tr></thead>
+    <tbody>${R.recent_finished.map((r) => `<tr>
+      <td class="mono"><b>${esc(r.symbol)}</b></td>
+      <td><span class="side ${r.side}">${r.side.toUpperCase()}</span></td>
+      <td><span class="chipstat ${r.status}">${r.status}</span></td>
+      <td class="mono ${cls(r.pnl_pct)}">${fmtPct(r.pnl_pct)}</td>
+      <td>${r.taken ? "✓" : ""}</td></tr>`).join("")}</tbody></table>` : "";
+  // Confidence calibration: bucket finished recs by stated confidence.
+  try {
+    const all = await api("/api/recommendations");
+    const fin = all.filter((r) => ["stopped", "target_hit"].includes(r.status) && r.outcome && r.outcome.pnl_pct != null);
+    const buckets = [["< 60%", (c) => c < 0.6], ["60–70%", (c) => c >= 0.6 && c < 0.7], ["70–80%", (c) => c >= 0.7 && c < 0.8], ["80%+", (c) => c >= 0.8]];
+    const rows = buckets.map(([label, test]) => {
+      const grp = fin.filter((r) => test(r.confidence || 0));
+      const wins = grp.filter((r) => r.outcome.pnl_pct > 0);
+      return { label, n: grp.length, wr: grp.length ? Math.round((wins.length / grp.length) * 100) : null,
+        avg: grp.length ? (grp.reduce((s2, r) => s2 + r.outcome.pnl_pct, 0) / grp.length).toFixed(2) : null };
+    });
+    $("perf-calibration").innerHTML = fin.length ? `<table class="grid"><thead><tr><th>Stated confidence</th><th>Graded</th><th>Win rate</th><th>Avg outcome</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr><td>${r.label}</td><td class="mono">${r.n}</td>
+        <td class="mono ${r.wr != null ? (r.wr >= 50 ? "up" : "down") : ""}">${r.wr != null ? r.wr + "%" : "—"}</td>
+        <td class="mono ${cls(Number(r.avg))}">${r.avg != null ? fmtPct(Number(r.avg)) : "—"}</td></tr>`).join("")}</tbody></table>`
+      : '<div class="hint">Needs finished recommendations to grade.</div>';
+  } catch (_) {}
+  $("perf-trade-tiles").innerHTML = `
+    <div class="tile"><div class="v">${T.closed}</div><div class="l">closed trades</div></div>
+    <div class="tile"><div class="v ${T.win_rate >= 50 ? "up" : T.win_rate == null ? "" : "down"}">${T.win_rate != null ? T.win_rate + "%" : "—"}</div><div class="l">win rate</div></div>
+    <div class="tile"><div class="v ${cls(T.total_pnl)}">$${fmtP(T.total_pnl, 2)}</div><div class="l">total P&L</div></div>
+    <div class="tile"><div class="v ${cls(T.avg_pnl_pct)}">${fmtPct(T.avg_pnl_pct)}</div><div class="l">avg per trade</div></div>`;
+}
+
+// Threshold backtester.
+$("bt-run").addEventListener("click", async () => {
+  const btn = $("bt-run"); btn.disabled = true; $("bt-note").textContent = "replaying the past year… (~30-90s)";
+  try {
+    const r = await api("/api/backtest", { method: "POST", body: JSON.stringify({ min_signals: Number($("bt-minsig").value) || 2 }) });
+    $("bt-note").textContent = "";
+    $("bt-results").innerHTML = `
+      <div class="tiles" style="margin-top:8px">
+        <div class="tile"><div class="v">${r.total_trades}</div><div class="l">sim trades</div></div>
+        <div class="tile"><div class="v ${r.overall_win_rate >= 50 ? "up" : "down"}">${r.overall_win_rate ?? "—"}%</div><div class="l">win rate</div></div>
+        <div class="tile"><div class="v ${cls(r.avg_pnl_pct)}">${fmtPct(r.avg_pnl_pct)}</div><div class="l">avg trade</div></div>
+        <div class="tile"><div class="v">${r.symbols_with_trades}/${r.symbols_tested}</div><div class="l">symbols traded</div></div>
+      </div>
+      <div class="hint">Rules: enter next open when ≥${r.config.min_signals} of your buy signals fire (trend-filtered); stop ${r.config.stop}; target ${r.config.rr}×risk; max ${r.config.max_hold_bars} bars. Mechanical — tests your thresholds, not the AI.</div>
+      <table class="grid" style="margin-top:8px"><thead><tr><th>Symbol</th><th>Trades</th><th>Win rate</th><th>Avg</th><th>Total</th></tr></thead>
+      <tbody>${r.by_symbol.filter((x) => x.trades > 0).slice(0, 15).map((x) => `<tr>
+        <td class="mono"><b>${esc(x.symbol)}</b></td><td class="mono">${x.trades}</td>
+        <td class="mono">${x.win_rate ?? "—"}%</td>
+        <td class="mono ${cls(x.avg_pnl_pct)}">${fmtPct(x.avg_pnl_pct)}</td>
+        <td class="mono ${cls(x.total_pnl_pct)}">${fmtPct(x.total_pnl_pct)}</td></tr>`).join("")}</tbody></table>`;
+  } catch (e) { $("bt-note").textContent = "✗ " + e.message; }
+  finally { btn.disabled = false; }
+});
+
+/* ---------- charts ---------- */
+let chart = null, candleSeries = null, volSeries = null, overlaySeries = [];
+let planLines = [], pendingPlan = null;   // trade-plan price lines (entry/stop/targets)
+let rsiChart = null, macdChart = null;
+let curSymbol = "AAPL", curDays = 365, chartData = null;
+const overlays = new Set();
+
+function mkChart(el, h) {
+  return LightweightCharts.createChart(el, {
+    layout: { background: { color: "transparent" }, textColor: "#7d8ea6" },
+    grid: { vertLines: { color: "#141d30" }, horzLines: { color: "#141d30" } },
+    rightPriceScale: { borderColor: "#1d2940" },
+    timeScale: { borderColor: "#1d2940" },
+    crosshair: { mode: 0 },
+    autoSize: true,
+  });
+}
+function ensureChart() { if (!chart) { chart = mkChart($("chart-main")); candleSeries = chart.addCandlestickSeries({ upColor: "#34d399", downColor: "#f87171", borderVisible: false, wickUpColor: "#34d399", wickDownColor: "#f87171" }); loadChart(curSymbol); } }
+
+async function loadChart(symbol) {
+  curSymbol = symbol.toUpperCase();
+  $("chart-symbol").value = curSymbol;
+  $("chart-info").textContent = "loading…";
+  try {
+    chartData = await api(`/api/chart/${encodeURIComponent(curSymbol)}?days=${curDays}`);
+  } catch (e) {
+    // Fresh data unavailable -> BLANK chart (never leave old candles looking current).
+    chartData = null;
+    candleSeries.setData([]);
+    clearOverlaySeries();
+    drawPlan(null);
+    if (rsiChart) { try { rsiChart.remove(); } catch (_) {} rsiChart = null; $("chart-rsi").hidden = true; }
+    if (macdChart) { try { macdChart.remove(); } catch (_) {} macdChart = null; $("chart-macd").hidden = true; }
+    $("chart-info").textContent = "⚠ no fresh data — " + e.message;
+    return;
+  }
+  const { candles, latest } = chartData;
+  candleSeries.setData(candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
+  chart.timeScale().fitContent();
+  drawPlan(pendingPlan);
+  const lastBar = candles[candles.length - 1];
+  const lastLabel = typeof lastBar.time === "string" ? lastBar.time : new Date(lastBar.time * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  $("chart-info").textContent = `${curSymbol} · ${fmtP(latest.price)} · RSI ${latest.rsi ?? "—"} · ${candles.length} bars · last bar ${lastLabel}`;
+  drawOverlays();
+}
+// Draw a trade plan on the chart: entry zone (two dashed cyan lines), stop (red),
+// targets (green). Cleared automatically when the symbol changes without a plan.
+function drawPlan(plan) {
+  planLines.forEach((l) => { try { candleSeries.removePriceLine(l); } catch (_) {} });
+  planLines = [];
+  if (!plan) return;
+  const add = (price, color, title, style) => { if (price != null) planLines.push(candleSeries.createPriceLine({ price, color, lineWidth: 1.5, lineStyle: style ?? 2, axisLabelVisible: true, title })); };
+  add(plan.entry_low, "#38bdf8", "entry low");
+  add(plan.entry_high, "#38bdf8", "entry high");
+  add(plan.entry, "#38bdf8", "entry", 0);
+  add(plan.stop_loss, "#f87171", "stop", 0);
+  (plan.targets || []).forEach((t, i) => add(t.price, "#34d399", `T${i + 1} (${t.sell_pct}%)`));
+}
+
+function clearOverlaySeries() {
+  overlaySeries.forEach((s) => { try { chart.removeSeries(s); } catch (_) {} });
+  overlaySeries = [];
+  if (volSeries) { try { chart.removeSeries(volSeries); } catch (_) {} volSeries = null; }
+}
+function lineData(candles, arr) {
+  const out = [];
+  for (let i = 0; i < candles.length; i++) if (arr[i] != null) out.push({ time: candles[i].time, value: arr[i] });
+  return out;
+}
+function drawOverlays() {
+  if (!chartData) return;
+  const { candles, series } = chartData;
+  clearOverlaySeries();
+  const addLine = (arr, color, w = 1.6) => { const s = chart.addLineSeries({ color, lineWidth: w, priceLineVisible: false, lastValueVisible: false }); s.setData(lineData(candles, arr)); overlaySeries.push(s); };
+
+  if (overlays.has("sma") && series.sma_fast) { addLine(series.sma_fast, "#38bdf8"); addLine(series.sma_slow, "#a78bfa"); }
+  if (overlays.has("ema") && series.ema) addLine(series.ema, "#fbbf24");
+  if (overlays.has("bollinger") && series.bollinger) { addLine(series.bollinger.upper, "#64748b", 1); addLine(series.bollinger.mid, "#64748b", 1); addLine(series.bollinger.lower, "#64748b", 1); }
+  if (overlays.has("vwap") && series.vwap) addLine(series.vwap, "#f472b6");
+  if (overlays.has("volume")) {
+    volSeries = chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" } });
+    chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    volSeries.setData(candles.map((c) => ({ time: c.time, value: c.volume, color: c.close >= c.open ? "rgba(52,211,153,.45)" : "rgba(248,113,113,.45)" })));
+  }
+
+  // Sub-panes: RSI / MACD get their own small charts, time-synced to the main one.
+  $("chart-rsi").hidden = !overlays.has("rsi");
+  if (overlays.has("rsi") && series.rsi) {
+    if (!rsiChart) rsiChart = mkChart($("chart-rsi"));
+    rsiChart.timeScale().applyOptions({ visible: false });
+    // wipe + redraw
+    try { rsiChart.remove(); } catch (_) {}
+    rsiChart = mkChart($("chart-rsi"));
+    const s = rsiChart.addLineSeries({ color: "#38bdf8", lineWidth: 1.6 });
+    s.setData(lineData(candles, series.rsi));
+    s.createPriceLine({ price: 70, color: "#f87171", lineWidth: 1, lineStyle: 2, title: "70" });
+    s.createPriceLine({ price: 30, color: "#34d399", lineWidth: 1, lineStyle: 2, title: "30" });
+    rsiChart.timeScale().fitContent();
+  } else if (rsiChart) { try { rsiChart.remove(); } catch (_) {} rsiChart = null; }
+
+  $("chart-macd").hidden = !overlays.has("macd");
+  if (overlays.has("macd") && series.macd) {
+    if (macdChart) { try { macdChart.remove(); } catch (_) {} }
+    macdChart = mkChart($("chart-macd"));
+    const h = macdChart.addHistogramSeries({});
+    h.setData(lineData(candles, series.macd.hist).map((p) => ({ ...p, color: p.value >= 0 ? "rgba(52,211,153,.6)" : "rgba(248,113,113,.6)" })));
+    const l1 = macdChart.addLineSeries({ color: "#38bdf8", lineWidth: 1.4 }); l1.setData(lineData(candles, series.macd.line));
+    const l2 = macdChart.addLineSeries({ color: "#fbbf24", lineWidth: 1.2 }); l2.setData(lineData(candles, series.macd.signal));
+    macdChart.timeScale().fitContent();
+  } else if (macdChart) { try { macdChart.remove(); } catch (_) {} macdChart = null; }
+}
+
+document.querySelectorAll("#overlay-chips .chip").forEach((c) => c.addEventListener("click", () => {
+  const k = c.dataset.ov;
+  overlays.has(k) ? overlays.delete(k) : overlays.add(k);
+  c.classList.toggle("on", overlays.has(k));
+  drawOverlays();
+}));
+document.querySelectorAll("#chart-range button").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("#chart-range button").forEach((x) => x.classList.toggle("active", x === b));
+  curDays = Number(b.dataset.d); loadChart(curSymbol);
+}));
+function openChart(symbol, plan = null) {
+  pendingPlan = plan;
+  document.querySelector('[data-tab="charts"]').click();
+  loadChart(symbol);
+}
+// symbol search with suggestions
+let sugT = null;
+$("chart-symbol").addEventListener("input", () => {
+  clearTimeout(sugT);
+  const q = $("chart-symbol").value.trim();
+  if (q.length < 2) { $("sym-suggest").hidden = true; return; }
+  sugT = setTimeout(async () => {
+    try {
+      const list = await api("/api/search?q=" + encodeURIComponent(q));
+      $("sym-suggest").innerHTML = list.map((s) => `<div data-s="${esc(s.symbol)}"><span class="s">${esc(s.symbol)}</span>${esc(s.name)} <span class="hint">${esc(s.exchange)}</span></div>`).join("");
+      $("sym-suggest").hidden = !list.length;
+      $("sym-suggest").querySelectorAll("div").forEach((d) => d.addEventListener("mousedown", () => { $("sym-suggest").hidden = true; loadChart(d.dataset.s); }));
+    } catch (_) {}
+  }, 250);
+});
+$("chart-symbol").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("sym-suggest").hidden = true; pendingPlan = null; loadChart($("chart-symbol").value.trim()); } });
+document.addEventListener("click", (e) => { if (!e.target.closest(".sym-search")) $("sym-suggest").hidden = true; });
+
+/* ---------- settings ---------- */
+let dbBadge = "…";
+async function loadSettings() {
+  const [s, dbc] = await Promise.all([api("/api/settings"), api("/api/db/config").catch(() => null)]);
+  const root = $("settings-root");
+  const strat = s.preferences.options.strategies;
+  root.innerHTML = `
+  <div class="sform" id="sf-ai">
+    <h3>🤖 AI model</h3>
+    <div class="hint">Pick a provider (or any custom OpenAI-compatible endpoint), then choose from its available models.</div>
+    <div class="frow"><label>Provider</label><select id="ai-provider">
+      <option value="ollama">Ollama (local)</option>
+      <option value="openai">OpenAI</option>
+      <option value="lmstudio">LM Studio (local)</option>
+      <option value="custom">Custom endpoint…</option>
+    </select></div>
+    <div class="frow"><label>Endpoint URL</label><input type="text" id="ai-url" value="${esc(s.ai.base_url)}"></div>
+    <div class="frow"><label>API key</label><input type="password" id="ai-key" value="${esc(s.ai.api_key)}" placeholder="required for OpenAI · empty for local"></div>
+    <div class="frow"><label>Model</label>
+      <select id="ai-model-sel" style="flex:1;min-width:120px"><option value="${esc(s.ai.model)}" selected>${esc(s.ai.model)}</option></select>
+      <button class="ghost small" id="ai-models-load" title="Fetch the model list from the endpoint">↻ Load models</button></div>
+    <div class="frow"><label></label><input type="text" id="ai-model" value="${esc(s.ai.model)}" placeholder="or type a model name manually"></div>
+    <div class="frow"><label>Temperature</label><input type="number" class="short" id="ai-temp" step="0.1" min="0" max="2" value="${s.ai.temperature}">
+      <label style="width:auto">Max tokens</label><input type="number" class="short" id="ai-maxtok" step="500" value="${s.ai.max_tokens}"></div>
+    <div class="save-row"><button class="primary" id="save-ai">Save</button><button class="ghost" id="test-ai">Test connection</button><span id="note-ai"></span></div>
+  </div>
+
+  <div class="sform" id="sf-db">
+    <h3>🗄️ Database</h3>
+    <div class="hint">Active: <b>${esc(dbc ? dbc.dialect_active : "?")}</b>. Changing dialect requires <code>./ADVISOR.sh --init-db</code> then <code>--restart</code>.</div>
+    <div class="frow"><label>Dialect</label><select id="db-dialect">
+      <option value="sqlite" ${dbc && dbc.dialect === "sqlite" ? "selected" : ""}>SQLite (zero setup)</option>
+      <option value="mysql" ${dbc && dbc.dialect === "mysql" ? "selected" : ""}>MySQL</option></select></div>
+    <div id="db-mysql" ${dbc && dbc.dialect === "mysql" ? "" : "hidden"}>
+      <div class="frow"><label>Host</label><input type="text" id="db-host" value="${esc(dbc && dbc.mysql ? dbc.mysql.host : "127.0.0.1")}">
+        <label style="width:auto">Port</label><input type="number" class="short" id="db-port" value="${dbc && dbc.mysql ? dbc.mysql.port : 3306}"></div>
+      <div class="frow"><label>User</label><input type="text" id="db-user" value="${esc(dbc && dbc.mysql ? dbc.mysql.user : "advisor")}"></div>
+      <div class="frow"><label>Password</label><input type="password" id="db-pass" value="${esc(dbc && dbc.mysql ? dbc.mysql.password : "")}"></div>
+      <div class="frow"><label>Database</label><input type="text" id="db-name" value="${esc(dbc && dbc.mysql ? dbc.mysql.database : "investment_advisor")}"></div>
+    </div>
+    <div class="save-row"><button class="primary" id="save-db">Save</button><span id="note-db"></span></div>
+  </div>
+
+  <div class="sform" id="sf-prefs">
+    <h3>🎯 Investment preferences</h3>
+    <div class="frow check"><input type="checkbox" id="p-stocks" ${s.preferences.asset_classes.stocks ? "checked" : ""}><label for="p-stocks"><b>Stocks</b></label>
+      <input type="checkbox" id="p-crypto" ${s.preferences.asset_classes.crypto ? "checked" : ""}><label for="p-crypto"><b>Crypto</b></label></div>
+    <div class="frow"><label>Stock universe</label><select id="p-stock-uni">
+      <option value="popular" ${s.preferences.stocks.universe === "popular" ? "selected" : ""}>Popular large caps (built-in)</option>
+      <option value="custom" ${s.preferences.stocks.universe === "custom" ? "selected" : ""}>Only my custom list</option></select></div>
+    <div class="frow"><label>Custom stocks</label><textarea id="p-stock-list" placeholder="AAPL, NVDA, TSLA…">${esc((s.preferences.stocks.custom_symbols || []).join(", "))}</textarea></div>
+    <div class="frow"><label>Exclude stocks</label><textarea id="p-stock-excl" placeholder="never recommend these">${esc((s.preferences.stocks.exclude_symbols || []).join(", "))}</textarea></div>
+    <div class="frow"><label>Crypto universe</label><select id="p-crypto-uni">
+      <option value="top" ${s.preferences.crypto.universe === "top" ? "selected" : ""}>Top coins by market cap</option>
+      <option value="custom" ${s.preferences.crypto.universe === "custom" ? "selected" : ""}>Only my custom list</option></select>
+      <label style="width:auto">Top N</label><input type="number" class="short" id="p-crypto-n" min="5" max="100" value="${s.preferences.crypto.top_n}"></div>
+    <div class="frow"><label>Custom crypto</label><textarea id="p-crypto-list" placeholder="bitcoin, ethereum, SOL…">${esc((s.preferences.crypto.custom_symbols || []).join(", "))}</textarea></div>
+    <div class="frow"><label>Exclude crypto</label><textarea id="p-crypto-excl">${esc((s.preferences.crypto.exclude_symbols || []).join(", "))}</textarea></div>
+    <div class="frow check"><input type="checkbox" id="p-shorts" ${s.preferences.risk.allow_shorts !== false ? "checked" : ""}><label for="p-shorts">Include <b>short ideas</b> (SELL-side recommendations) — untick for long ideas only</label></div>
+    <div class="frow"><label>Risk tolerance</label><select id="p-risk">
+      ${["conservative", "moderate", "aggressive"].map((r) => `<option ${s.preferences.risk.risk_tolerance === r ? "selected" : ""}>${r}</option>`).join("")}</select>
+      <label style="width:auto">Max recs/scan</label><input type="number" class="short" id="p-maxrecs" min="1" max="15" value="${s.preferences.risk.max_recommendations_per_scan}"></div>
+    <div class="frow"><label>Min confidence</label><input type="number" class="short" id="p-minconf" step="0.05" min="0" max="1" value="${s.preferences.risk.min_confidence}">
+      <label style="width:auto">Min reward:risk</label><input type="number" class="short" id="p-minrr" step="0.1" min="0" value="${s.preferences.risk.min_risk_reward}"></div>
+    <div class="frow"><label>Account size $</label><input type="number" class="short" id="p-account" step="500" min="0" value="${s.preferences.risk.account_size}">
+      <label style="width:auto">Risk per trade %</label><input type="number" class="short" id="p-riskpct" step="0.25" min="0" max="100" value="${s.preferences.risk.risk_per_trade_pct}"></div>
+    <div class="frow"><label>Earnings buffer (days)</label><input type="number" class="short" id="p-earnbuf" min="0" max="30" value="${s.preferences.risk.avoid_earnings_days}"><span class="hint">flag stock entries this close to earnings (0 = off)</span></div>
+    <div class="frow check"><input type="checkbox" id="p-be" ${s.preferences.risk.stops.breakeven_after_target1 ? "checked" : ""}><label for="p-be">Suggest breakeven stop after target 1</label></div>
+    <div class="frow check"><input type="checkbox" id="p-trail" ${s.preferences.risk.stops.atr_trailing ? "checked" : ""}><label for="p-trail">Suggest ATR trailing stop</label>
+      <label style="width:auto">× ATR</label><input type="number" class="short" id="p-atrmult" step="0.5" min="1" max="6" value="${s.preferences.risk.stops.atr_multiple}"></div>
+    <div class="save-row"><button class="primary" id="save-prefs">Save</button><span id="note-prefs"></span></div>
+  </div>
+
+  <div class="sform" id="sf-options">
+    <h3>🧾 Options trading</h3>
+    <div class="frow check"><input type="checkbox" id="o-enabled" ${s.preferences.options.enabled ? "checked" : ""}><label for="o-enabled"><b>Suggest options plays</b> (alongside stock ideas)</label></div>
+    <div class="hint">Tick only the strategies you're comfortable trading:</div>
+    ${Object.keys(strat).map((k) => `<div class="frow check"><input type="checkbox" id="o-${k}" ${strat[k] ? "checked" : ""}><label for="o-${k}">${k.replace(/_/g, " ")}</label></div>`).join("")}
+    <div class="frow"><label>Max days to expiry</label><input type="number" class="short" id="o-dte" min="1" max="365" value="${s.preferences.options.max_dte}"></div>
+    <div class="frow"><label>Guidance for AI</label><textarea id="o-notes" placeholder="e.g. small premium only, no earnings weeks">${esc(s.preferences.options.notes)}</textarea></div>
+    <div class="save-row"><button class="primary" id="save-options">Save</button><span id="note-options"></span></div>
+  </div>
+
+  <div class="sform" id="sf-ind">
+    <h3>📐 Technical indicators <span class="hint-inline">— all enabled ones feed the AI; charts draw only what you toggle</span></h3>
+    ${indRow("rsi", s.indicators.rsi, ["period", "buy_below", "sell_above"])}
+    ${indRow("macd", s.indicators.macd, ["fast", "slow", "signal"])}
+    ${indRow("sma", s.indicators.sma, ["fast", "slow"])}
+    ${indRow("ema", s.indicators.ema, ["period"])}
+    ${indRow("bollinger", s.indicators.bollinger, ["period", "stddev"])}
+    ${indRow("stochastic", s.indicators.stochastic, ["k", "d", "buy_below", "sell_above"])}
+    ${indRow("atr", s.indicators.atr, ["period"])}
+    ${indRow("adx", s.indicators.adx, ["period", "trend_min"])}
+    ${indRow("obv", s.indicators.obv, [])}
+    ${indRow("vwap", s.indicators.vwap, [])}
+    <div class="save-row"><button class="primary" id="save-ind">Save</button><span id="note-ind"></span></div>
+  </div>
+
+  <div class="sform" id="sf-sched">
+    <h3>⏰ Scanning & tracking</h3>
+    <div class="frow check"><input type="checkbox" id="sc-on" ${s.schedule.scan_enabled ? "checked" : ""}><label for="sc-on"><b>Scheduled scans</b></label></div>
+    <div class="frow"><label>Scan every (hours)</label><input type="number" class="short" id="sc-every" min="1" max="168" value="${s.schedule.scan_every_hours}">
+      <label style="width:auto">Daily at hour</label><input type="number" class="short" id="sc-hour" min="0" max="23" value="${s.schedule.scan_at_hour}"></div>
+    <div class="frow"><label>Track open trades (min)</label><input type="number" class="short" id="sc-trades" min="1" value="${s.schedule.track_open_trades_minutes}"></div>
+    <div class="frow"><label>Track recs (min)</label><input type="number" class="short" id="sc-recs" min="5" value="${s.schedule.track_recommendations_minutes}"></div>
+    <div class="frow"><label>Rec entry expiry (days)</label><input type="number" class="short" id="sc-expiry" min="1" value="${s.schedule.rec_expiry_days}"></div>
+    <div class="frow"><label>Health checks (hours)</label><input type="number" class="short" id="sc-health" min="0" value="${s.schedule.health_check_hours}"><span class="hint">0 = manual only</span></div>
+    <div class="frow check"><input type="checkbox" id="sc-brief" ${s.schedule.briefing_enabled ? "checked" : ""}><label for="sc-brief"><b>Daily AI briefing</b></label>
+      <label style="width:auto">at hour</label><input type="number" class="short" id="sc-briefhour" min="0" max="23" value="${s.schedule.briefing_hour}"></div>
+    <div class="save-row"><button class="primary" id="save-sched">Save</button><span id="note-sched"></span></div>
+  </div>
+
+  <div class="sform" id="sf-view">
+    <h3>👁 View</h3>
+    <div class="hint">Show or hide parts of the UI. Display-only — the AI's analysis, scanning, and tracking are never affected.</div>
+    <div class="frow check vgroup"><b>Dashboard</b><span class="hint">(always shown)</span></div>
+    ${Object.entries({ briefing: "Daily briefing", sentiment: "Market sentiment", success: "System success rate", latest_recs: "Latest recommendations", headlines: "Headlines", activity: "Activity" }).map(([k, label]) =>
+      `<div class="frow check sub-check"><input type="checkbox" id="v-dash-${k}" ${s.view.dashboard[k] !== false ? "checked" : ""}><label for="v-dash-${k}">${label}</label></div>`).join("")}
+    <div class="frow check vgroup"><input type="checkbox" id="v-tab-recommendations" ${s.view.tabs.recommendations !== false ? "checked" : ""}><label for="v-tab-recommendations"><b>Recommendations</b></label></div>
+    <div class="frow check vgroup"><input type="checkbox" id="v-tab-charts" ${s.view.tabs.charts !== false ? "checked" : ""}><label for="v-tab-charts"><b>Charts</b></label></div>
+    <div class="frow check vgroup"><input type="checkbox" id="v-tab-watchlist" ${s.view.tabs.watchlist !== false ? "checked" : ""}><label for="v-tab-watchlist"><b>Watchlist</b></label></div>
+    <div class="frow check vgroup"><input type="checkbox" id="v-tab-trades" ${s.view.tabs.trades !== false ? "checked" : ""}><label for="v-tab-trades"><b>Trades</b></label></div>
+    <div class="frow check vgroup"><input type="checkbox" id="v-tab-performance" ${s.view.tabs.performance !== false ? "checked" : ""}><label for="v-tab-performance"><b>Performance</b></label></div>
+    ${Object.entries({ rec_performance: "Recommendation performance", your_trades: "Your trades", calibration: "Confidence calibration", backtest: "Threshold backtest" }).map(([k, label]) =>
+      `<div class="frow check sub-check"><input type="checkbox" id="v-perf-${k}" ${s.view.performance[k] !== false ? "checked" : ""}><label for="v-perf-${k}">${label}</label></div>`).join("")}
+    <div class="save-row"><button class="primary" id="save-view">Save</button><span id="note-view"></span></div>
+  </div>
+
+  <div class="sform" id="sf-notif">
+    <h3>🔔 Notifications</h3>
+    <div class="hint">How timing alerts (stop crossed, target hit, health verdicts) reach you.</div>
+    <div class="frow check"><input type="checkbox" id="n-browser" ${s.notifications.browser ? "checked" : ""}><label for="n-browser"><b>Browser notifications</b> (while this page is open)</label></div>
+    <div class="frow"><label>Webhook URL</label><input type="password" id="n-webhook" value="${esc(s.notifications.webhook_url)}" placeholder="ntfy.sh/your-topic · Discord · Slack webhook"></div>
+    <div class="hint" style="margin:-4px 0 8px 160px">Free & easy: create a topic at ntfy.sh, put the URL here, install the ntfy app on your phone.</div>
+    <div class="frow check"><input type="checkbox" id="n-stops" ${s.notifications.notify_on.stops_targets ? "checked" : ""}><label for="n-stops">stops & targets</label>
+      <input type="checkbox" id="n-sugg" ${s.notifications.notify_on.stop_suggestions ? "checked" : ""}><label for="n-sugg">stop suggestions</label>
+      <input type="checkbox" id="n-health" ${s.notifications.notify_on.health ? "checked" : ""}><label for="n-health">health verdicts</label>
+      <input type="checkbox" id="n-scans" ${s.notifications.notify_on.scans ? "checked" : ""}><label for="n-scans">scans & new recs</label>
+      <input type="checkbox" id="n-brief" ${s.notifications.notify_on.briefing ? "checked" : ""}><label for="n-brief">daily briefing</label></div>
+    <div class="save-row"><button class="primary" id="save-notif">Save</button><button class="ghost" id="test-notif">Send test</button><span id="note-notif"></span></div>
+  </div>
+
+  <div class="sform" id="sf-prov">
+    <h3>📡 Data feeds</h3>
+    <div class="frow"><label>News RSS feeds<br><span class="hint">one per line</span></label><textarea id="pr-feeds" style="min-height:110px">${esc((s.providers.news_feeds || []).join("\n"))}</textarea></div>
+    <div class="frow"><label>FMP key</label><input type="password" id="pr-fmp" value="${esc(s.providers.fmp_key)}" placeholder="free key — stock candles + quotes + congress trades"></div>
+    <div class="hint" style="margin:-4px 0 8px 160px">Congressional trades need a free key from financialmodelingprep.com (keyless sources block servers).</div>
+    <div class="frow"><label>Alpha Vantage key</label><input type="password" id="pr-av" value="${esc(s.providers.alpha_vantage_key)}" placeholder="optional"></div>
+    <div class="frow"><label>Finnhub key</label><input type="password" id="pr-fh" value="${esc(s.providers.finnhub_key)}" placeholder="free key — primary stock quotes (60/min)"></div>
+    <div class="hint" style="margin:-4px 0 8px 160px">Recommended: free FMP + Finnhub keys make stock data independent of Yahoo (which throttles hard). Crypto needs no keys.</div>
+    <div class="save-row"><button class="primary" id="save-prov">Save</button><span id="note-prov"></span></div>
+  </div>`;
+
+  // --- wire saves ---
+  const note = (id, msg, ok = true) => { const el = $(id); el.className = ok ? "saved-note" : "err-note"; el.textContent = msg; setTimeout(() => { el.textContent = ""; }, 4000); };
+  const listOf = (v) => v.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
+
+  // Provider presets fill the endpoint URL; "custom" leaves it alone.
+  const AI_PRESETS = { ollama: "http://localhost:11434/v1", openai: "https://api.openai.com/v1", lmstudio: "http://localhost:1234/v1" };
+  const urlToProvider = (u) => /openai\.com/.test(u) ? "openai" : /:11434/.test(u) ? "ollama" : /:1234/.test(u) ? "lmstudio" : "custom";
+  $("ai-provider").value = urlToProvider(s.ai.base_url);
+  $("ai-provider").addEventListener("change", () => {
+    const p = $("ai-provider").value;
+    if (AI_PRESETS[p]) $("ai-url").value = AI_PRESETS[p];
+    loadAiModels();   // repopulate the dropdown from the new endpoint
+  });
+  // Model dropdown <-> manual text field stay in sync (dropdown wins on selection).
+  $("ai-model-sel").addEventListener("change", () => { $("ai-model").value = $("ai-model-sel").value; });
+  async function loadAiModels() {
+    const sel = $("ai-model-sel");
+    sel.innerHTML = "<option>loading…</option>";
+    try {
+      const r = await api("/api/ai/models", { method: "POST", body: JSON.stringify({ base_url: $("ai-url").value.trim(), api_key: $("ai-key").value }) });
+      const cur = $("ai-model").value.trim();
+      sel.innerHTML = r.models.map((m) => `<option value="${esc(m)}" ${m === cur ? "selected" : ""}>${esc(m)}</option>`).join("") || `<option value="">(no models found)</option>`;
+      if (!r.models.includes(cur) && cur) sel.insertAdjacentHTML("afterbegin", `<option value="${esc(cur)}" selected>${esc(cur)} (current)</option>`);
+      note("note-ai", `✓ ${r.models.length} model(s) available`);
+    } catch (e) {
+      sel.innerHTML = `<option value="${esc($("ai-model").value)}" selected>${esc($("ai-model").value)}</option>`;
+      note("note-ai", "couldn't list models: " + e.message, false);
+    }
+  }
+  $("ai-models-load").addEventListener("click", loadAiModels);
+  loadAiModels();   // auto-populate on opening Settings
+  $("save-ai").addEventListener("click", async () => {
+    try {
+      await api("/api/settings/ai", { method: "PUT", body: JSON.stringify({ base_url: $("ai-url").value.trim(), api_key: $("ai-key").value, model: $("ai-model").value.trim(), temperature: Number($("ai-temp").value), max_tokens: Number($("ai-maxtok").value) }) });
+      note("note-ai", "Saved ✓");
+    } catch (e) { note("note-ai", e.message, false); }
+  });
+  $("test-ai").addEventListener("click", async () => {
+    note("note-ai", "testing…");
+    try {
+      const r = await api("/api/ai/test", { method: "POST", body: JSON.stringify({ base_url: $("ai-url").value.trim(), api_key: $("ai-key").value, model: $("ai-model").value.trim() }) });
+      note("note-ai", `✓ ${r.model} replied: "${r.reply}"`);
+    } catch (e) { note("note-ai", "✗ " + e.message, false); }
+  });
+  $("db-dialect").addEventListener("change", () => { $("db-mysql").hidden = $("db-dialect").value !== "mysql"; });
+  $("save-db").addEventListener("click", async () => {
+    try {
+      const body = { dialect: $("db-dialect").value };
+      if (body.dialect === "mysql") body.mysql = { host: $("db-host").value.trim(), port: Number($("db-port").value), user: $("db-user").value.trim(), password: $("db-pass").value, database: $("db-name").value.trim() };
+      const r = await api("/api/db/config", { method: "PUT", body: JSON.stringify(body) });
+      note("note-db", r.note || "Saved ✓");
+    } catch (e) { note("note-db", e.message, false); }
+  });
+  $("save-prefs").addEventListener("click", async () => {
+    try {
+      await api("/api/settings/preferences", { method: "PUT", body: JSON.stringify({
+        asset_classes: { stocks: $("p-stocks").checked, crypto: $("p-crypto").checked },
+        stocks: { universe: $("p-stock-uni").value, custom_symbols: listOf($("p-stock-list").value), exclude_symbols: listOf($("p-stock-excl").value) },
+        crypto: { universe: $("p-crypto-uni").value, top_n: Number($("p-crypto-n").value), custom_symbols: listOf($("p-crypto-list").value), exclude_symbols: listOf($("p-crypto-excl").value) },
+        risk: {
+          risk_tolerance: $("p-risk").value, allow_shorts: $("p-shorts").checked, max_recommendations_per_scan: Number($("p-maxrecs").value),
+          min_confidence: Number($("p-minconf").value), min_risk_reward: Number($("p-minrr").value),
+          account_size: Number($("p-account").value), risk_per_trade_pct: Number($("p-riskpct").value),
+          avoid_earnings_days: Number($("p-earnbuf").value),
+          stops: { breakeven_after_target1: $("p-be").checked, atr_trailing: $("p-trail").checked, atr_multiple: Number($("p-atrmult").value) },
+        },
+        options: curOptions(),
+      }) });
+      note("note-prefs", "Saved ✓");
+      loadAppSettings();   // refresh the sizing math
+    } catch (e) { note("note-prefs", e.message, false); }
+  });
+  const curOptions = () => ({
+    enabled: $("o-enabled").checked,
+    strategies: Object.fromEntries(Object.keys(strat).map((k) => [k, $("o-" + k).checked])),
+    max_dte: Number($("o-dte").value), notes: $("o-notes").value,
+  });
+  $("save-options").addEventListener("click", async () => {
+    try {
+      const cur = await api("/api/settings");
+      await api("/api/settings/preferences", { method: "PUT", body: JSON.stringify({ ...stripMask(cur.preferences), options: curOptions() }) });
+      note("note-options", "Saved ✓");
+    } catch (e) { note("note-options", e.message, false); }
+  });
+  const stripMask = (o) => JSON.parse(JSON.stringify(o));
+  $("save-ind").addEventListener("click", async () => {
+    try {
+      const body = {};
+      document.querySelectorAll("#sf-ind .ind-row").forEach((row) => {
+        const k = row.dataset.ind;
+        body[k] = { enabled: row.querySelector("input[type=checkbox]").checked };
+        row.querySelectorAll("input[data-p]").forEach((inp) => { body[k][inp.dataset.p] = Number(inp.value); });
+      });
+      await api("/api/settings/indicators", { method: "PUT", body: JSON.stringify(body) });
+      note("note-ind", "Saved ✓");
+    } catch (e) { note("note-ind", e.message, false); }
+  });
+  $("save-sched").addEventListener("click", async () => {
+    try {
+      await api("/api/settings/schedule", { method: "PUT", body: JSON.stringify({
+        scan_enabled: $("sc-on").checked, scan_every_hours: Number($("sc-every").value), scan_at_hour: Number($("sc-hour").value),
+        track_open_trades_minutes: Number($("sc-trades").value), track_recommendations_minutes: Number($("sc-recs").value),
+        rec_expiry_days: Number($("sc-expiry").value), health_check_hours: Number($("sc-health").value),
+        briefing_enabled: $("sc-brief").checked, briefing_hour: Number($("sc-briefhour").value),
+      }) });
+      note("note-sched", "Saved ✓");
+    } catch (e) { note("note-sched", e.message, false); }
+  });
+  $("save-view").addEventListener("click", async () => {
+    try {
+      const pick = (prefix, keysList) => Object.fromEntries(keysList.map((k) => [k, $(prefix + k).checked]));
+      await api("/api/settings/view", { method: "PUT", body: JSON.stringify({
+        tabs: pick("v-tab-", ["recommendations", "charts", "watchlist", "trades", "performance"]),
+        dashboard: pick("v-dash-", ["briefing", "sentiment", "success", "latest_recs", "headlines", "activity"]),
+        performance: pick("v-perf-", ["rec_performance", "your_trades", "calibration", "backtest"]),
+      }) });
+      await loadAppSettings(); applyView();
+      note("note-view", "Saved ✓ — view updated");
+    } catch (e) { note("note-view", e.message, false); }
+  });
+  $("save-notif").addEventListener("click", async () => {
+    try {
+      await api("/api/settings/notifications", { method: "PUT", body: JSON.stringify({
+        browser: $("n-browser").checked, webhook_url: $("n-webhook").value,
+        notify_on: { stops_targets: $("n-stops").checked, stop_suggestions: $("n-sugg").checked, health: $("n-health").checked, scans: $("n-scans").checked, briefing: $("n-brief").checked },
+      }) });
+      if ($("n-browser").checked && window.Notification && Notification.permission === "default") Notification.requestPermission();
+      note("note-notif", "Saved ✓"); loadAppSettings();
+    } catch (e) { note("note-notif", e.message, false); }
+  });
+  $("test-notif").addEventListener("click", async () => {
+    note("note-notif", "sending…");
+    try {
+      const r = await api("/api/notify/test", { method: "POST", body: JSON.stringify({ webhook_url: $("n-webhook").value }) });
+      note("note-notif", r.ok ? "✓ webhook delivered" : "✗ webhook failed — check the URL", r.ok);
+      if ($("n-browser").checked && window.Notification) {
+        if (Notification.permission === "default") await Notification.requestPermission();
+        if (Notification.permission === "granted") new Notification("Investment Advisor", { body: "🔔 Browser notifications work." });
+      }
+    } catch (e) { note("note-notif", "✗ " + e.message, false); }
+  });
+  $("save-prov").addEventListener("click", async () => {
+    try {
+      await api("/api/settings/providers", { method: "PUT", body: JSON.stringify({
+        news_feeds: $("pr-feeds").value.split("\n").map((x) => x.trim()).filter(Boolean),
+        alpha_vantage_key: $("pr-av").value, finnhub_key: $("pr-fh").value, fmp_key: $("pr-fmp").value,
+      }) });
+      note("note-prov", "Saved ✓");
+    } catch (e) { note("note-prov", e.message, false); }
+  });
+}
+function indRow(key, cfg, params) {
+  return `<div class="ind-row" data-ind="${key}">
+    <input type="checkbox" ${cfg.enabled ? "checked" : ""}>
+    <span class="nm">${key.toUpperCase()}</span>
+    <span class="ind-params">${params.map((p) => `<label>${p.replace(/_/g, " ")}</label><input type="number" step="any" data-p="${p}" value="${cfg[p]}">`).join("")}</span>
+  </div>`;
+}
+
+/* ---------- advisor chat drawer ---------- */
+const chatDrawer = $("chat-drawer"), chatMsgs = $("chat-msgs"), chatText = $("chat-text");
+let chatHistory = JSON.parse(localStorage.getItem("advisor_chat") || "[]");   // [{role, content}]
+let chatBusy = false;
+
+function chatOpen() {
+  chatDrawer.classList.add("open"); $("drawer-backdrop").hidden = false;
+  if (!chatMsgs.childElementCount) {
+    if (chatHistory.length) chatHistory.forEach((m) => renderMsg(m.role === "user" ? "user" : "ai", m.content));
+    else renderMsg("ai", "Hi — I'm your advisor. I can see **everything this tool sees**: live quotes, technical analysis with *your* thresholds, the recommendation log and its track record, your trades and P&L, news, sentiment, and smart-money data.\n\nAsk me anything about the market or your positions — or type `/help` for commands and example questions.");
+  }
+  chatText.focus();
+}
+function chatClose() { chatDrawer.classList.remove("open"); $("drawer-backdrop").hidden = true; }
+$("chat-btn").addEventListener("click", chatOpen);
+$("chat-close").addEventListener("click", chatClose);
+$("drawer-backdrop").addEventListener("click", chatClose);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && chatDrawer.classList.contains("open")) chatClose(); });
+$("chat-clear").addEventListener("click", () => { chatHistory = []; localStorage.removeItem("advisor_chat"); chatMsgs.innerHTML = ""; renderMsg("ai", "Conversation cleared. What shall we look at?"); });
+
+// Markdown-lite: escape first, then bold/italic/code/headers. pre-wrap keeps lists/breaks.
+function mdLite(text) {
+  let t = esc(text);
+  t = t.replace(/```([\s\S]*?)```/g, (_, c) => `<code>${c.trim()}</code>`);
+  t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  t = t.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  t = t.replace(/(^|\n)#{1,4}\s*([^\n]+)/g, '$1<span class="h">$2</span>');
+  t = t.replace(/(^|\n)\s*[-*]\s/g, "$1 • ");
+  return t;
+}
+function renderMsg(kind, text, extraClass = "") {
+  const div = document.createElement("div");
+  div.className = `cmsg ${kind} ${extraClass}`.trim();
+  div.innerHTML = mdLite(text);
+  chatMsgs.appendChild(div);
+  chatMsgs.scrollTop = chatMsgs.scrollHeight;
+  return div;
+}
+function renderTrace(trace) {
+  if (!trace || !trace.length) return;
+  const div = document.createElement("div");
+  div.className = "ctrace";
+  div.innerHTML = trace.map((t) => `<span>🔧 ${esc(t.tool)}${t.args && t.args.symbol ? ":" + esc(t.args.symbol) : ""}</span>`).join("");
+  chatMsgs.appendChild(div);
+  chatMsgs.scrollTop = chatMsgs.scrollHeight;
+}
+
+// --- Slash commands: quick skills. Most expand into a rich prompt; a few act locally. ---
+const HELP_TEXT = `# Advisor commands
+\`/help\` — this help
+\`/analyze SYMBOL\` — full technical read of a stock/crypto (e.g. \`/analyze NVDA\`)
+\`/market\` — market overview: indexes, sentiment, headlines
+\`/recs\` — review the current active recommendations
+\`/portfolio\` — review your open trades vs their plans
+\`/performance\` — the system's honest track record
+\`/news [SYMBOL]\` — latest headlines (optionally for one symbol)
+\`/whales\` — smart-money activity (congress trades, 13F filers)
+\`/ideas\` — ask for fresh trade ideas within your preferences
+\`/scan\` — launch a full market scan (background)
+\`/clear\` — clear this conversation
+
+# Example questions
+• "What do you think of **AAPL** right now — worth an entry?"
+• "Which of my open trades is closest to its stop?"
+• "Is there anything oversold in my crypto universe?"
+• "Why did the system recommend that last NVDA trade, and how did it play out?"
+• "Given the fear index today, should I be cautious this week?"
+• "Suggest an options play on MSFT within my comfort settings."
+
+*Research tool — not financial advice. You decide; it analyzes.*`;
+
+const SLASH = {
+  help: () => { renderMsg("ai", HELP_TEXT, "help"); },
+  clear: () => $("chat-clear").click(),
+  scan: async () => {
+    try { await api("/api/scan", { method: "POST" }); renderMsg("ai", "⚡ **Scan launched.** Results will appear in the Recommendations tab in a minute or two — ask me `/recs` after."); pollScan(); }
+    catch (e) { renderMsg("ai", "Couldn't start a scan: " + e.message); }
+  },
+  analyze: (arg) => arg ? sendChat(`Give me a full technical analysis of ${arg.toUpperCase()}: pull the indicators and recent news, tell me where it stands against my thresholds, and whether an entry looks attractive (entry zone / stop / targets if so).`) : renderMsg("ai", "Usage: `/analyze SYMBOL` — stocks or crypto, e.g. `/analyze NVDA`, `/analyze BTC`, `/analyze solana`"),
+  market: () => sendChat("Give me a market overview: index levels, stock & crypto sentiment gauges, and the headlines that matter today. Keep it tight."),
+  recs: () => sendChat("Review the current active recommendations (open + tracking): status vs their entry zones and targets, and which still look valid right now."),
+  portfolio: () => sendChat("Review my open trades: current price vs entry, distance to stop and next target, unrealized P&L, and anything that needs my attention."),
+  performance: () => sendChat("How has the system performed? Give the honest track record — win rate, average outcome, and what it suggests about trusting these recommendations."),
+  news: (arg) => sendChat(arg ? `What's in the news for ${arg.toUpperCase()}? Summarize what matters for the trade.` : "What are today's most market-moving headlines? Summarize the themes."),
+  whales: () => sendChat("What's the smart money doing? Check congressional trades and recent 13F filers, and flag anything relevant to my universe."),
+  ideas: () => sendChat("Scan your knowledge of my preferences, then propose 2-3 fresh trade ideas within them — full structure: entry zone, stop, laddered targets, horizon, confidence, and rationale grounded in current data."),
+};
+
+async function sendChat(text) {
+  if (chatBusy) return;
+  renderMsg("user", text);
+  chatHistory.push({ role: "user", content: text });
+  chatBusy = true; $("chat-send").disabled = true;
+  let bubble = renderMsg("ai", "consulting the data<i>…</i>", "thinking");
+  let streamedText = "", gotReply = false;
+  try {
+    // Streamed NDJSON: tokens render live; tool rounds show as chips.
+    const resp = await fetch("/api/advisor-chat?stream=1", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: chatHistory.slice(-16) }) });
+    if (!resp.ok || !resp.body) throw new Error((await resp.json().catch(() => ({}))).error || `${resp.status}`);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+        if (!line) continue;
+        let ev; try { ev = JSON.parse(line); } catch { continue; }
+        if (ev.type === "tools") {
+          bubble.classList.add("thinking");
+          bubble.innerHTML = mdLite("🔧 " + ev.tools.map((t) => t.tool + (t.args && t.args.symbol ? ":" + t.args.symbol : "")).join(" · ") + "<i>…</i>");
+          streamedText = "";
+        } else if (ev.type === "reset") { streamedText = ""; }
+        else if (ev.type === "token") {
+          streamedText += ev.text;
+          bubble.classList.remove("thinking");
+          bubble.innerHTML = mdLite(streamedText);
+          chatMsgs.scrollTop = chatMsgs.scrollHeight;
+        } else if (ev.type === "done") {
+          gotReply = true;
+          bubble.classList.remove("thinking");
+          bubble.innerHTML = mdLite(ev.reply);
+          bubble.insertAdjacentHTML("beforebegin", ev.trace && ev.trace.length ? `<div class="ctrace">${ev.trace.map((t) => `<span>🔧 ${esc(t.tool)}${t.args && t.args.symbol ? ":" + esc(t.args.symbol) : ""}</span>`).join("")}</div>` : "");
+          chatHistory.push({ role: "assistant", content: ev.reply });
+          localStorage.setItem("advisor_chat", JSON.stringify(chatHistory.slice(-40)));
+        } else if (ev.type === "error") throw new Error(ev.error);
+      }
+    }
+    if (!gotReply) throw new Error("stream ended without a reply");
+  } catch (e) {
+    bubble.classList.remove("thinking");
+    bubble.innerHTML = mdLite("⚠ " + e.message + (/(LLM|endpoint)/i.test(e.message) ? " — check Settings → AI model." : ""));
+    chatHistory.pop();   // failed turn doesn't pollute history
+  } finally { chatBusy = false; $("chat-send").disabled = false; chatText.focus(); chatMsgs.scrollTop = chatMsgs.scrollHeight; }
+}
+
+$("chat-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const raw = chatText.value.trim();
+  if (!raw) return;
+  chatText.value = "";
+  if (raw.startsWith("/")) {
+    const [cmd, ...rest] = raw.slice(1).split(/\s+/);
+    const fn = SLASH[cmd.toLowerCase()];
+    // Local commands render the raw command as the user bubble; prompt-expanding ones
+    // let sendChat() render the expanded question instead (no double bubbles).
+    if (fn) { if (["help", "scan", "clear"].includes(cmd.toLowerCase())) renderMsg("user", raw); fn(rest.join(" ")); return; }
+    renderMsg("user", raw);
+    renderMsg("ai", `Unknown command \`/${esc(cmd)}\` — type \`/help\` to see what I know.`);
+    return;
+  }
+  sendChat(raw);
+});
+chatText.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("chat-form").requestSubmit(); }
+});
+
+/* ---------- view visibility: user-chosen tabs/cards (display-only) ---------- */
+const VIEW_MAP = {
+  tabs: { recommendations: "recs", charts: "charts", watchlist: "watchlist", trades: "trades", performance: "performance" },
+  dashboard: { briefing: "card-briefing", sentiment: "card-sentiment", success: "card-success", latest_recs: "card-latest", headlines: "card-news", activity: "card-events" },
+  performance: { rec_performance: "card-perf-recs", your_trades: "card-perf-trades", calibration: "card-perf-cal", backtest: "card-perf-bt" },
+};
+function applyView() {
+  const v = appSettings && appSettings.view;
+  if (!v) return;
+  for (const [key, tabName] of Object.entries(VIEW_MAP.tabs)) {
+    const btn = document.querySelector(`#tabs .tab[data-tab="${tabName}"]`);
+    if (btn) btn.style.display = v.tabs[key] === false ? "none" : "";
+    // If the currently-active tab was just hidden, land back on the dashboard.
+    if (v.tabs[key] === false && btn && btn.classList.contains("active"))
+      document.querySelector('#tabs .tab[data-tab="dashboard"]').click();
+  }
+  for (const group of ["dashboard", "performance"]) {
+    for (const [key, id] of Object.entries(VIEW_MAP[group])) {
+      const el = $(id);
+      if (el) el.style.display = (v[group] && v[group][key] === false) ? "none" : "";
+    }
+  }
+}
+
+/* ---------- browser notifications: poll events, surface new alerts ---------- */
+const ALERT_TYPES = new Set(["stop_hit", "target_hit", "entry_hit", "stop_suggest", "health"]);
+let lastEventId = Number(localStorage.getItem("advisor_last_event") || 0);
+async function pollAlerts() {
+  if (!appSettings || !appSettings.notifications || !appSettings.notifications.browser) return;
+  if (!window.Notification || Notification.permission !== "granted") return;
+  try {
+    const evs = await api("/api/events?limit=20");
+    const fresh = evs.filter((e) => e.id > lastEventId && ALERT_TYPES.has(e.type));
+    if (lastEventId > 0) {
+      for (const e of fresh.slice(0, 5)) new Notification("Investment Advisor" + (e.symbol ? " · " + e.symbol : ""), { body: e.message, tag: "adv-" + e.id });
+    }
+    if (evs.length) { lastEventId = Math.max(lastEventId, ...evs.map((e) => e.id)); localStorage.setItem("advisor_last_event", String(lastEventId)); }
+  } catch (_) {}
+}
+
+/* ---------- boot ---------- */
+(async () => {
+  try {
+    const dbc = await api("/api/db/config");
+    dbBadge = "db: " + dbc.dialect_active;
+    $("db-badge").textContent = dbBadge;
+  } catch (_) {}
+  await loadAppSettings();          // risk numbers for position-sizing math
+  applyView();                      // user-chosen tab/card visibility
+  loadDashboard();
+  pollScan();                       // reflects an in-flight scheduled scan on load
+  setInterval(loadMarketStrip, 5 * 60 * 1000);   // keep the strip fresh
+  if (appSettings && appSettings.notifications && appSettings.notifications.browser &&
+      window.Notification && Notification.permission === "default") Notification.requestPermission();
+  pollAlerts(); setInterval(pollAlerts, 45 * 1000);   // desktop alerts while the page is open
+  // Live "price now" on the Recommendations tab: refresh every 60s while it's visible.
+  setInterval(() => { if ($("panel-recs").classList.contains("active") && !document.hidden) loadRecs(); }, 60 * 1000);
+})();

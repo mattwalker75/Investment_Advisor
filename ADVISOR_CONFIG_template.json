@@ -1,0 +1,8 @@
+{
+  "_comment": "Database connection (the one setting that can't live in the DB). dialect: 'sqlite' (default, zero-setup) or 'mysql'. Re-run ./ADVISOR.sh --init-db after changing.",
+  "db": {
+    "dialect": "sqlite",
+    "sqlite": { "file": "data/advisor.db" },
+    "mysql":  { "host": "127.0.0.1", "port": 3306, "user": "advisor", "password": "", "database": "investment_advisor" }
+  }
+}

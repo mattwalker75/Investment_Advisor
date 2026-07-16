@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Investment Advisor</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="pulse"></span>
+      <div>
+        <div class="title">INVESTMENT ADVISOR</div>
+        <div class="sub" id="scan-sub">AI market scanner · <span id="db-badge">—</span></div>
+      </div>
+    </div>
+    <div class="market-strip" id="market-strip"><!-- index tickers injected --></div>
+    <div class="top-actions">
+      <button id="scan-btn" class="primary">⚡ Scan market</button>
+      <button id="chat-btn" class="primary chatty" title="Talk to the AI about investments — it can see all of this tool's data">💬 Advisor</button>
+    </div>
+  </header>
+
+  <!-- Advisor chat drawer: converse with the AI; it has live tool access to quotes,
+       analysis, recommendations, trades, performance, news, sentiment, smart money. -->
+  <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+  <aside class="drawer" id="chat-drawer" aria-label="Advisor chat">
+    <div class="drawer-head">
+      <div><b>💬 Advisor</b> <span class="hint">— sees everything this tool sees · type <code>/help</code></span></div>
+      <div class="drawer-tools">
+        <button class="ghost small" id="chat-clear" title="Clear conversation">🗑</button>
+        <button class="ghost small" id="chat-close" title="Close (Esc)">✕</button>
+      </div>
+    </div>
+    <div class="drawer-msgs" id="chat-msgs"></div>
+    <form class="drawer-input" id="chat-form">
+      <textarea id="chat-text" rows="2" placeholder="Ask about a symbol, your trades, the market…  (/help for commands · Enter to send)"></textarea>
+      <button type="submit" class="primary" id="chat-send">➤</button>
+    </form>
+  </aside>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="dashboard">Dashboard</button>
+    <button class="tab" data-tab="recs">Recommendations <span class="badge" id="recs-badge" hidden></span></button>
+    <button class="tab" data-tab="charts">Charts</button>
+    <button class="tab" data-tab="watchlist">Watchlist</button>
+    <button class="tab" data-tab="trades">Trades <span class="badge" id="trades-badge" hidden></span></button>
+    <button class="tab" data-tab="performance">Performance</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </nav>
+
+  <main>
+    <!-- ============ DASHBOARD ============ -->
+    <section class="panel active" id="panel-dashboard">
+      <div class="dash-grid">
+        <div class="card wide" id="card-briefing">
+          <h3>📰 Daily briefing <button id="briefing-run" class="ghost small">Generate now</button> <span class="hint" id="briefing-when"></span></h3>
+          <div id="briefing-body" class="briefing"><div class="hint">No briefing yet — enable it in Settings → Scanning, or click Generate now.</div></div>
+        </div>
+        <div class="card" id="card-sentiment">
+          <h3>Market sentiment</h3>
+          <div class="senti-row" id="senti-row"><div class="hint">Loading…</div></div>
+        </div>
+        <div class="card" id="card-success">
+          <h3>System success rate <span class="hint-inline">— every recommendation is shadow-tracked, taken or not</span></h3>
+          <div class="tiles" id="success-tiles"><div class="hint">No finished recommendations yet.</div></div>
+        </div>
+        <div class="card wide" id="card-latest">
+          <h3>Latest recommendations <button id="dash-scan-link" class="ghost small">Scan now</button></h3>
+          <div id="dash-recs"><div class="hint">No recommendations yet — run a scan.</div></div>
+        </div>
+        <div class="card" id="card-news">
+          <h3>Headlines <span class="hint-inline">(last 24 hours · <span class="up">green</span> positive / <span class="down">red</span> negative)</span>
+            <button id="news-ai-review" class="ghost small" title="Have the AI re-grade sentiment for these headlines (market impact, not tone)">🤖 AI review</button>
+            <span class="hint-inline" id="news-ai-note"></span></h3>
+          <div class="newslist" id="dash-news"><div class="hint">Loading…</div></div>
+        </div>
+        <div class="card" id="card-events">
+          <h3>Activity</h3>
+          <div class="events" id="dash-events"><div class="hint">Nothing yet.</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ RECOMMENDATIONS ============ -->
+    <section class="panel" id="panel-recs">
+      <div class="toolbar">
+        <div class="seg" id="recs-filter">
+          <button data-f="active" class="active">Active</button>
+          <button data-f="all">All</button>
+          <button data-f="finished">Finished</button>
+        </div>
+        <div class="seg" id="recs-type-filter">
+          <button data-t="all" class="active">All types</button>
+          <button data-t="stock">📈 Stocks</button>
+          <button data-t="option">🧾 Options</button>
+          <button data-t="crypto">₿ Crypto</button>
+        </div>
+        <button id="recs-refresh" class="ghost" onclick="refreshRecPrices()" title="Pull fresh prices and update phase status — strategy levels are never changed">↻ Refresh prices</button>
+        <span class="hint" id="recs-count"></span>
+      </div>
+      <div id="recs-list"></div>
+    </section>
+
+    <!-- ============ CHARTS ============ -->
+    <section class="panel" id="panel-charts">
+      <div class="toolbar">
+        <div class="sym-search">
+          <input id="chart-symbol" placeholder="Symbol… (AAPL, BTC-USD)" autocomplete="off" spellcheck="false">
+          <div class="sym-suggest" id="sym-suggest" hidden></div>
+        </div>
+        <div class="seg" id="chart-range">
+          <button data-d="7">5D</button>
+          <button data-d="90">3M</button>
+          <button data-d="180">6M</button>
+          <button data-d="365" class="active">1Y</button>
+          <button data-d="730">2Y</button>
+        </div>
+        <div class="chips" id="overlay-chips">
+          <!-- indicators are ALWAYS fed to the AI; these chips only control what's DRAWN -->
+          <button class="chip" data-ov="sma">SMA</button>
+          <button class="chip" data-ov="ema">EMA</button>
+          <button class="chip" data-ov="bollinger">BB</button>
+          <button class="chip" data-ov="vwap">VWAP</button>
+          <button class="chip" data-ov="volume">Vol</button>
+          <button class="chip" data-ov="rsi">RSI</button>
+          <button class="chip" data-ov="macd">MACD</button>
+        </div>
+        <span class="hint" id="chart-info"></span>
+      </div>
+      <div id="chart-main" class="chartbox"></div>
+      <div id="chart-rsi" class="chartbox sub" hidden></div>
+      <div id="chart-macd" class="chartbox sub" hidden></div>
+    </section>
+
+    <!-- ============ WATCHLIST ============ -->
+    <section class="panel" id="panel-watchlist">
+      <div class="toolbar">
+        <h3 class="bare">Watchlist</h3>
+        <input id="wl-symbol" placeholder="Add symbol… (AAPL, BTC, solana)" style="width:220px" autocomplete="off">
+        <input id="wl-above" type="number" step="any" placeholder="alert above" class="short-in">
+        <input id="wl-below" type="number" step="any" placeholder="alert below" class="short-in">
+        <button id="wl-add" class="ghost">＋ Watch</button>
+        <span class="hint">Watched symbols always join scans (with priority) and fire alerts on your levels.</span>
+      </div>
+      <div id="wl-list"></div>
+    </section>
+
+    <!-- ============ TRADES ============ -->
+    <section class="panel" id="panel-trades">
+      <div class="toolbar">
+        <h3 class="bare">Open positions</h3>
+        <button id="health-check-btn" class="ghost" title="AI reviews every open position: HOLD / TIGHTEN STOP / TAKE PARTIAL / SELL NOW">🩺 Run health check</button>
+        <button id="trade-add-btn" class="ghost">＋ Log a manual trade</button>
+        <span class="hint" id="health-note"></span>
+      </div>
+      <div id="concentration-banner"></div>
+      <div id="trades-open"></div>
+      <h3 class="section">Closed trades</h3>
+      <div id="trades-closed"></div>
+    </section>
+
+    <!-- ============ PERFORMANCE ============ -->
+    <section class="panel" id="panel-performance">
+      <div class="dash-grid">
+        <div class="card wide" id="card-perf-recs">
+          <h3>Recommendation performance <span class="hint-inline">— shadow-tracked outcomes of everything the AI said</span></h3>
+          <div class="tiles" id="perf-rec-tiles"></div>
+          <div id="perf-rec-recent"></div>
+        </div>
+        <div class="card wide" id="card-perf-trades">
+          <h3>Your trades</h3>
+          <div class="tiles" id="perf-trade-tiles"></div>
+          <div class="toolbar" style="margin-top:8px">
+            <a class="ghost btn-link" href="/api/export/trades.csv">⬇ Export trades CSV</a>
+            <a class="ghost btn-link" href="/api/export/recommendations.csv">⬇ Export recommendations CSV</a>
+          </div>
+        </div>
+        <div class="card" id="card-perf-cal">
+          <h3>Confidence calibration <span class="hint-inline">— how much to trust each confidence level</span></h3>
+          <div id="perf-calibration"><div class="hint">Needs finished recommendations.</div></div>
+        </div>
+        <div class="card" id="card-perf-bt">
+          <h3>🧪 Threshold backtest <span class="hint-inline">— simulate YOUR indicator thresholds over the past year</span></h3>
+          <div class="frow"><label>Min signals to enter</label><input id="bt-minsig" type="number" min="1" max="4" value="2" class="short-in">
+            <button id="bt-run" class="ghost">Run backtest</button><span class="hint" id="bt-note"></span></div>
+          <div id="bt-results"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SETTINGS ============ -->
+    <section class="panel" id="panel-settings">
+      <div class="settings-grid" id="settings-root">
+        <div class="hint">Loading settings…</div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Take-trade / exit / manual-trade modal -->
+  <div class="modal-backdrop" id="modal" hidden>
+    <div class="modal" id="modal-box"></div>
+  </div>
+
+  <footer class="disclaimer">
+    Research tool — not financial advice. Markets involve risk; you are responsible for your own trades.
+  </footer>
+
+  <script src="/vendor/lightweight-charts/lightweight-charts.standalone.production.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

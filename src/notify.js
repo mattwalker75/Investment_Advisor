@@ -1,0 +1,46 @@
+"use strict";
+// Outbound notifications — how timing alerts reach you when the browser is closed.
+// One webhook URL in Settings, format auto-detected:
+//   - Discord webhook  (discord.com/api/webhooks/...)  -> {content}
+//   - Slack webhook    (hooks.slack.com/...)           -> {text}
+//   - ntfy.sh topic / anything else                    -> plain-text POST with Title header
+// Browser desktop notifications are handled client-side (app.js polls /api/events).
+const settings = require("./settings");
+
+// Which event types pass which user gate (Settings → Notifications).
+const GATES = {
+  stop_hit: "stops_targets", target_hit: "stops_targets", entry_hit: "stops_targets",
+  stop_suggest: "stop_suggestions",
+  health: "health",
+  scan: "scans", rec_new: "scans", rec_expired: "scans",
+  briefing: "briefing",
+};
+
+async function sendWebhook(title, message) {
+  const cfg = settings.getSync().notifications || {};
+  const url = (cfg.webhook_url || "").trim();
+  if (!url) return false;
+  try {
+    let init;
+    if (/discord\.com\/api\/webhooks/.test(url)) {
+      init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: `**${title}**\n${message}`.slice(0, 1900) }) };
+    } else if (/hooks\.slack\.com/.test(url)) {
+      init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `*${title}*\n${message}` }) };
+    } else {
+      init = { method: "POST", headers: { Title: title.replace(/[^\x20-\x7E]/g, ""), Priority: "default" }, body: message };
+    }
+    const r = await fetch(url, { ...init, signal: AbortSignal.timeout(10000) });
+    return r.ok;
+  } catch (_) { return false; }
+}
+
+// Fire-and-forget: called by the shared event logger for alert-worthy event types.
+function eventNotify(type, symbol, message) {
+  const cfg = settings.getSync().notifications || {};
+  const gate = GATES[type];
+  if (!gate || !(cfg.notify_on || {})[gate]) return;
+  const title = `Investment Advisor${symbol ? " · " + symbol : ""}`;
+  sendWebhook(title, message).catch(() => {});
+}
+
+module.exports = { sendWebhook, eventNotify };
