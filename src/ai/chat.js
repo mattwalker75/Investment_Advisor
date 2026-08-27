@@ -17,10 +17,59 @@ const scanner = require("../engine/scanner");
 const { resolveAsset } = require("../resolve");
 
 const { J, yahooSym } = require("../util");
+const { logEvent } = require("../events");
 const T = (name, description, params = {}, required = []) => ({
   type: "function",
   function: { name, description, parameters: { type: "object", properties: params, required } },
 });
+
+// ---- Durable chat memory: short notes persisted in the settings KV table, injected
+// into every conversation's system prompt and managed by the manage_memory tool. ----
+const MEMORY_KEY = "advisor_memory";
+async function loadNotes() {
+  const row = await db.get("SELECT value FROM settings WHERE `key`=?", [MEMORY_KEY]).catch(() => null);
+  const notes = row ? J(row.value, []) : [];
+  return Array.isArray(notes) ? notes : [];
+}
+async function saveNotes(notes) {
+  await db.run(db.upsertSql("settings", ["key", "value", "updated_at"], "key"),
+    [MEMORY_KEY, JSON.stringify(notes), Date.now()]);
+}
+
+// ---- Tool-result packing: keep results under ~14k chars WITHOUT blunt mid-JSON cuts.
+// Passes: (1) as-is if small; (2) structural shrink — drop the huge `inputs` snapshot,
+// cap long arrays and strings; (3) last resort: an explicitly-marked partial prefix so
+// the model knows it's looking at an excerpt, not malformed data. ----
+const RESULT_LIMIT = 14000;
+function shrink(v) {
+  if (Array.isArray(v)) {
+    return v.length > 20 ? [...v.slice(0, 20).map(shrink), `…(${v.length - 20} more items omitted)`] : v.map(shrink);
+  }
+  if (v && typeof v === "object") {
+    const o = {};
+    for (const [k, val] of Object.entries(v)) {
+      if (k === "inputs" && val && typeof val === "object")
+        o[k] = "(large input snapshot omitted — ask about specific parts if needed)";
+      else if (typeof val === "string" && val.length > 2000) o[k] = val.slice(0, 2000) + "…";
+      else o[k] = shrink(val);
+    }
+    return o;
+  }
+  return v;
+}
+function packResult(result) {
+  try {
+    let s = JSON.stringify(result);
+    if (s.length <= RESULT_LIMIT) return s;
+    s = JSON.stringify(shrink(result));
+    if (s.length <= RESULT_LIMIT) return s;
+    return JSON.stringify({
+      truncated: true,
+      note: "Result too large even after summarizing — this is a partial JSON prefix. Ask a narrower question or request specific fields.",
+      partial: s.slice(0, RESULT_LIMIT - 2000),
+    });
+  } catch (_) { return JSON.stringify({ error: "tool result could not be serialized" }); }
+}
 
 const TOOL_DEFS = [
   T("get_market_overview", "Current market snapshot: index-ETF (SPY/QQQ/DIA) + BTC/ETH quotes, stock & crypto Fear-and-Greed sentiment gauges, and top headlines."),
@@ -59,6 +108,31 @@ const TOOL_DEFS = [
       rationale: { type: "string" },
     },
     ["symbol", "side", "entry_low", "entry_high", "stop_loss", "targets", "confidence", "rationale"]),
+  T("run_backtest", "Backtest the USER'S indicator buy-thresholds mechanically over ~1 year of daily candles — this tests their threshold settings, NOT the AI. exit_model 'ladder_trail' (default) mirrors how the live system manages trades. Returns portfolio metrics (win rate, expectancy, profit factor, max drawdown) plus an in-sample vs out-of-sample split. Takes several seconds per symbol.",
+    { symbols: { type: "array", items: { type: "string" }, description: "up to 10 symbols; omit to use the user's stock universe (first 10)" },
+      min_signals: { type: "number", description: "buy signals that must fire together, default 2" },
+      exit_model: { type: "string", enum: ["ladder_trail", "bracket"] } }),
+  T("check_position_health", "Run the REAL AI health-check engine on the user's open positions — verdicts hold / tighten_stop / take_partial / sell_now, stored on each trade (same engine as the UI's Health check button). Pass trade_id for one position, omit for all. Use for 'should I still be holding X?'.",
+    { trade_id: { type: "number" } }),
+  T("revalidate_recommendation", "Re-validate an open/tracking recommendation against CURRENT data using the real revalidation engine: verdict valid | adjust (levels updated in place) | withdraw (closed, unless the user has taken the trade). Use for 'is that idea still good?'.",
+    { id: { type: "number" } }, ["id"]),
+  T("get_portfolio_concentration", "Sector-concentration check across the user's OPEN positions: position counts per sector plus correlated-risk warnings."),
+  T("compare_symbols", "Side-by-side technical comparison of 2-5 symbols on the user's own indicators: price, RSI, trend posture, ATR%, volatility percentile, relative strength vs SPY, and fired signals. Stocks and crypto both accepted, any spelling.",
+    { symbols: { type: "array", items: { type: "string" }, description: "2-5 symbols" },
+      asset_type: { type: "string", enum: ["stock", "crypto"], description: "optional hint applied to all" } }, ["symbols"]),
+  T("manage_watchlist", "Manage the user's watchlist. action: 'list' | 'add' (symbol + optional note/alert_above/alert_below) | 'remove' (id or symbol) | 'set_alerts' (id or symbol + levels; re-arms fired alerts). Confirm with the user before removing entries.",
+    { action: { type: "string", enum: ["list", "add", "remove", "set_alerts"] },
+      symbol: { type: "string" }, id: { type: "number" }, note: { type: "string" },
+      alert_above: { type: "number" }, alert_below: { type: "number" },
+      asset_type: { type: "string", enum: ["stock", "crypto"] } }, ["action"]),
+  T("update_trade", "Update the PLAN on an OPEN trade: stop_loss and/or the targets ladder. ADVISORY — the user still changes real orders at their broker. ALWAYS state the new levels and get the user's confirmation BEFORE calling. Clears any pending stop suggestion.",
+    { trade_id: { type: "number" }, stop_loss: { type: "number" },
+      targets: { type: "array", items: { type: "object", properties: { price: { type: "number" }, sell_pct: { type: "number" } }, required: ["price", "sell_pct"] } } },
+    ["trade_id"]),
+  T("get_economic_calendar", "Upcoming high-impact US macro events (FOMC, CPI, jobs report, GDP…) over the next N days (default 7) — binary-event risk beyond per-stock earnings dates. Requires the user's free FMP key; returns an explanatory note if unset.",
+    { days: { type: "number", description: "1-30, default 7" } }),
+  T("manage_memory", "Durable memory across conversations. action 'add' saves a short note (stable user preferences, goals, standing context — e.g. 'prefers 3-6 month holds', 'wants out of airlines'); 'remove' deletes by id; 'list' shows all. Your current notes are already in the system prompt. Save sparingly — only stable, genuinely useful facts.",
+    { action: { type: "string", enum: ["add", "remove", "list"] }, note: { type: "string" }, id: { type: "string" } }, ["action"]),
 ];
 
 async function execTool(name, args = {}) {
@@ -202,32 +276,129 @@ async function execTool(name, args = {}) {
         `💬 Chat idea saved: ${rec.side.toUpperCase()} ${rec.symbol} @ ${rec.entry_low}-${rec.entry_high} (R:R ${rec.risk_reward}, conf ${Math.round(rec.confidence * 100)}%)`);
       return { saved: true, id: res.lastID, note: "Now visible in the Recommendations tab and shadow-tracked like any scan idea.", levels: rec };
     }
+    case "run_backtest": {
+      const syms = Array.isArray(args.symbols) && args.symbols.length ? args.symbols.slice(0, 10).map(String) : null;
+      const r = await require("../engine/backtest").run(syms || (require("../engine/scanner").POPULAR_STOCKS.slice(0, 10)),
+        { min_signals: Number(args.min_signals) || 2, exit_model: args.exit_model === "bracket" ? "bracket" : "ladder_trail" });
+      for (const b of r.by_symbol || []) delete b.last_trades;   // keep the tool result lean
+      return r;
+    }
+    case "check_position_health": return await require("../engine/health").checkPositions(args.trade_id || null);
+    case "revalidate_recommendation": return await require("../engine/recommender").revalidate(Number(args.id));
+    case "get_portfolio_concentration": return await require("../engine/portfolio").concentration();
+    case "compare_symbols": {
+      const list = (Array.isArray(args.symbols) ? args.symbols : []).slice(0, 5);
+      if (list.length < 2) return { error: "give 2-5 symbols to compare" };
+      const bench = await yahoo.history("SPY", 365).then((c) => c.map((b) => b.close)).catch(() => null);
+      const out = [];
+      for (const sym of list) {
+        try {
+          const a = await resolveAsset(sym, args.asset_type);
+          const candles = await yahoo.history(a.yahoo, 365);
+          const { latest } = indicators.computeAllCached(`cmp:${a.yahoo}`, candles, s.indicators, bench ? { benchCloses: bench } : {});
+          out.push({ symbol: a.display, name: a.name, asset_type: a.asset_type, ...latest });
+        } catch (e) { out.push({ symbol: sym, error: e.message }); }
+      }
+      return out;
+    }
+    case "manage_watchlist": {
+      const up = (v) => String(v || "").toUpperCase().trim();
+      const find = async () => args.id
+        ? db.get("SELECT * FROM watchlist WHERE id=?", [args.id])
+        : db.get("SELECT * FROM watchlist WHERE symbol=? OR yahoo_symbol=?", [up(args.symbol), up(args.symbol)]);
+      switch (args.action) {
+        case "list": return await db.all("SELECT id, symbol, asset_type, name, note, alert_above, alert_below FROM watchlist ORDER BY id DESC");
+        case "add": {
+          if (!args.symbol) return { error: "symbol required" };
+          const a = await resolveAsset(args.symbol, args.asset_type);
+          const r = await db.run(
+            "INSERT INTO watchlist (created_at, symbol, yahoo_symbol, asset_type, name, note, alert_above, alert_below) VALUES (?,?,?,?,?,?,?,?)",
+            [Date.now(), a.display, a.yahoo, a.asset_type === "index" ? "stock" : a.asset_type, a.name, args.note || null,
+             args.alert_above ? Number(args.alert_above) : null, args.alert_below ? Number(args.alert_below) : null]);
+          return { ok: true, id: r.lastID, added: a.display, note: "On the watchlist — it now joins every scan with a priority boost." };
+        }
+        case "remove": {
+          const row = await find();
+          if (!row) return { error: "watchlist entry not found" };
+          await db.run("DELETE FROM watchlist WHERE id=?", [row.id]);
+          return { ok: true, removed: row.symbol };
+        }
+        case "set_alerts": {
+          const row = await find();
+          if (!row) return { error: "watchlist entry not found" };
+          await db.run("UPDATE watchlist SET alert_above=?, alert_below=?, alerts_fired=NULL WHERE id=?",
+            [args.alert_above != null ? Number(args.alert_above) : null, args.alert_below != null ? Number(args.alert_below) : null, row.id]);
+          return { ok: true, symbol: row.symbol, alert_above: args.alert_above ?? null, alert_below: args.alert_below ?? null, note: "alerts re-armed" };
+        }
+        default: return { error: "unknown watchlist action" };
+      }
+    }
+    case "update_trade": {
+      const t = await db.get("SELECT * FROM trades WHERE id=?", [args.trade_id]);
+      if (!t || t.status !== "open") return { error: "open trade not found (id " + args.trade_id + ")" };
+      const stop = args.stop_loss != null ? Number(args.stop_loss) : t.stop_loss;
+      const targets = Array.isArray(args.targets) ? JSON.stringify(args.targets) : t.targets;
+      await db.run("UPDATE trades SET stop_loss=?, targets=?, suggested_stop=NULL WHERE id=?", [stop, targets, t.id]);
+      if (args.stop_loss != null && args.stop_loss !== t.stop_loss)
+        await logEvent("stop_moved", "trade", t.id, t.symbol, `Stop moved (via chat): ${t.symbol} ${t.stop_loss ?? "—"} → ${stop}`);
+      return { ok: true, symbol: t.symbol, stop_loss: stop, targets: J(targets, []), note: "Plan updated here — remind the user to mirror it at their broker." };
+    }
+    case "get_economic_calendar": return await require("../providers/calendar").economicCalendar(args.days || 7);
+    case "manage_memory": {
+      const notes = await loadNotes();
+      switch (args.action) {
+        case "list": return notes;
+        case "add": {
+          const note = String(args.note || "").trim().slice(0, 300);
+          if (!note) return { error: "note required" };
+          notes.push({ id: Date.now().toString(36), at: new Date().toISOString().slice(0, 10), note });
+          while (notes.length > 40) notes.shift();
+          await saveNotes(notes);
+          return { ok: true, saved: note, count: notes.length };
+        }
+        case "remove": {
+          const i = notes.findIndex((n) => n.id === String(args.id));
+          if (i < 0) return { error: "no note with id " + args.id };
+          const [gone] = notes.splice(i, 1);
+          await saveNotes(notes);
+          return { ok: true, removed: gone.note };
+        }
+        default: return { error: "unknown memory action" };
+      }
+    }
     default: return { error: "unknown tool: " + name };
   }
 }
 
-function systemPrompt() {
+async function systemPrompt() {
   const s = settings.getSync();
+  const notes = await loadNotes().catch(() => []);
+  const memBlock = notes.length
+    ? `\n\nDURABLE MEMORY — notes you saved in past conversations (honor them; manage with manage_memory):\n${notes.map((n) => `- [${n.id}] (${n.at}) ${n.note}`).join("\n")}`
+    : "";
   return `You are the analyst behind this Investment Advisor tool — a sharp, honest trading assistant with LIVE tool access to everything the tool knows: quotes, technical analysis with the user's own indicator thresholds, options chains, the full recommendation log with tracked outcomes, the user's trades and P&L, news, sentiment gauges, and smart-money data.
 
 HOW TO WORK:
-- USE YOUR TOOLS. Never guess a price, indicator value, or portfolio fact — fetch it. For "what do you think of X?" call get_analysis (and usually get_news + get_quote) first.
+- USE YOUR TOOLS. Never guess a price, indicator value, or portfolio fact — fetch it. For "what do you think of X?" call get_analysis (and usually get_news + get_quote) first. For "X vs Y" use compare_symbols.
 - STOCKS AND CRYPTO are both first-class. get_quote/get_analysis/get_news accept either ("NVDA", "BTC", "bitcoin", "SOL"...) — pass asset_type to disambiguate colliding tickers. Options are stock-only; smart-money (congress/13F) is stock-only; get_crypto_universe lists the top coins.
 - Respect the user's preferences (get_preferences) — asset classes, risk tolerance (currently: ${s.preferences.risk.risk_tolerance}), options comfort${s.preferences.risk.allow_shorts === false ? ", and the user does NOT short — long ideas only (save_recommendation will reject side:'sell')" : ""}. Don't suggest what they've excluded.
+- REAL ENGINES over ad-hoc opinion: "should I still hold X?" → check_position_health; "is that idea still good?" → revalidate_recommendation; "do my thresholds actually work?" → run_backtest; "am I too concentrated?" → get_portfolio_concentration; "anything big this week?" → get_economic_calendar.
 - When you recommend a trade idea, give the full structure: entry zone, stop loss, laddered targets with sell percentages, rough time horizon, and WHY — grounded in the data you fetched.
 - When the user asks you to CREATE/LOG/TRACK a trade idea, you MUST call save_recommendation — that is the ONLY way an idea reaches the Recommendations tab and gets tracked. NEVER claim an idea is saved or "being tracked" unless the tool returned saved:true. If validation rejects it, fix the levels (usually the reward:risk ratio) and try once more, or tell the user why it can't stand.
+- WRITE ACTIONS need consent: confirm with the user before manage_watchlist remove and ALWAYS before update_trade (state the exact new levels first). Never claim a write happened unless the tool returned ok:true.
+- MEMORY: when the user states a stable preference, goal, or standing view worth keeping ("I prefer 3-6 month holds", "don't pitch me airlines"), save it with manage_memory (briefly note that you did). Don't save transient chatter.
 - Be honest about uncertainty and about the system's own track record (get_performance). If the data is mixed, say so.
 - Keep answers tight: short paragraphs, bullet lists, bold key numbers. You're in a chat panel, not writing a report.
 - You may check the recommendation log to explain or critique past calls.
 - Reminder to weave in when giving actionable ideas: this is research, not financial advice — the user decides.
 
-Today is ${new Date().toDateString()}.`;
+Today is ${new Date().toDateString()}.${memBlock}`;
 }
 
 // One conversational turn with a tool loop. messages = [{role:'user'|'assistant', content}]
 // Returns { reply, trace: [{tool, args}] } — trace lets the UI show what was consulted.
 async function converse(messages, opts = {}) {
-  const convo = [{ role: "system", content: systemPrompt() }, ...messages.slice(-16)];
+  const convo = [{ role: "system", content: await systemPrompt() }, ...messages.slice(-16)];
   const trace = [];
   for (let i = 0; i < 6; i++) {
     const r = await llm.chat(convo, { tools: TOOL_DEFS, timeout_ms: opts.timeout_ms || 300000 });
@@ -240,8 +411,7 @@ async function converse(messages, opts = {}) {
         let result;
         try { result = await execTool(tc.function.name, args); }
         catch (e) { result = { error: e.message }; }
-        const clipped = JSON.stringify(result);
-        convo.push({ role: "tool", tool_call_id: tc.id, content: clipped.length > 14000 ? clipped.slice(0, 14000) + "…[truncated]" : clipped });
+        convo.push({ role: "tool", tool_call_id: tc.id, content: packResult(result) });
       }
       continue;
     }
@@ -257,7 +427,7 @@ async function converse(messages, opts = {}) {
 // Each round streams; if the round turns out to be a tool call, the UI gets a 'reset'
 // so any partial pre-tool prose doesn't linger.
 async function converseStream(messages, emit, opts = {}) {
-  const convo = [{ role: "system", content: systemPrompt() }, ...messages.slice(-16)];
+  const convo = [{ role: "system", content: await systemPrompt() }, ...messages.slice(-16)];
   const trace = [];
   for (let i = 0; i < 6; i++) {
     let streamed = "";
@@ -280,8 +450,7 @@ async function converseStream(messages, emit, opts = {}) {
         let result;
         try { result = await execTool(tc.function.name, args); }
         catch (e) { result = { error: e.message }; }
-        const clipped = JSON.stringify(result);
-        convo.push({ role: "tool", tool_call_id: tc.id, content: clipped.length > 14000 ? clipped.slice(0, 14000) + "…[truncated]" : clipped });
+        convo.push({ role: "tool", tool_call_id: tc.id, content: packResult(result) });
       }
       continue;
     }
@@ -291,4 +460,4 @@ async function converseStream(messages, emit, opts = {}) {
   emit({ type: "done", reply: "(stopped after the maximum number of tool steps — try a narrower question)", trace });
 }
 
-module.exports = { converse, converseStream, TOOL_DEFS };
+module.exports = { converse, converseStream, TOOL_DEFS, packResult };
