@@ -231,7 +231,7 @@ async function recommend(context) {
   const { data, usage, model } = await llm.chatJSON([
     { role: "system", content: systemPrompt(prefs) + (calib ? `\n\n${calib}` : "") },
     { role: "user", content: userPrompt(context) },
-  ]);
+  ], { task: "scan" });
   const candidateMap = {};
   for (const c of context.candidates) candidateMap[c.symbol.toUpperCase()] = c;
   const recs = (Array.isArray(data.recommendations) ? data.recommendations : [])
@@ -276,7 +276,7 @@ Respond ONLY with JSON: {"verdict":"valid","note":"2-3 sentences grounded in the
         targets: JSON.parse(r.targets || "[]"), rationale_then: r.rationale, status: r.status },
       current: { price: q && q.price, indicators: latest, headlines: news.matching(heads, r.symbol.replace(/-USD$/, ""), r.name || "").map((h) => h.title), next_earnings: earnings },
     }) },
-  ]);
+  ], { task: "scan" });
 
   const verdict = ["valid", "adjust", "withdraw"].includes(data.verdict) ? data.verdict : "valid";
   const note = String(data.note || "").slice(0, 600);

@@ -19,7 +19,11 @@ router.put("/settings/:block", async (req, res) => {
     const incoming = req.body || {};
     // Masked secrets: '•••' means "keep what's stored" — never overwrite with the mask.
     const cur = await settings.getAll();
-    if (block === "ai" && incoming.api_key === "•••") incoming.api_key = cur.ai.api_key;
+    if (block === "ai") {
+      if (incoming.api_key === "•••") incoming.api_key = cur.ai.api_key;
+      if (incoming.failover && incoming.failover.api_key === "•••")
+        incoming.failover.api_key = (cur.ai.failover && cur.ai.failover.api_key) || "";
+    }
     if (block === "providers") {
       if (incoming.alpha_vantage_key === "•••") incoming.alpha_vantage_key = cur.providers.alpha_vantage_key;
       if (incoming.finnhub_key === "•••") incoming.finnhub_key = cur.providers.finnhub_key;

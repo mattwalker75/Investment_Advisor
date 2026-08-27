@@ -54,7 +54,7 @@ Given live data, produce a tight, skimmable morning read in markdown (max ~250 w
 4. **Watch today**: 1-3 bullets max.
 Be specific with numbers. No fluff, no disclaimers, no greetings.` },
     { role: "user", content: JSON.stringify(data) },
-  ], { max_tokens: 1200 });
+  ], { max_tokens: 1200, task: "light" });
   const text = (content || "").trim();
   if (!text) throw new Error("empty briefing from model");
   await logEvent("briefing", "briefing", null, null, text);

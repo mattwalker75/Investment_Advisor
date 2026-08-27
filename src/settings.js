@@ -13,6 +13,17 @@ const DEFAULTS = {
     model: "qwen3:8b",
     temperature: 0.3,
     max_tokens: 4000,
+    // Per-task model overrides (empty = use `model`). 'scan' runs the recommender,
+    // revalidation, and health checks (the hard reasoning); 'light' runs headline
+    // grading and the daily briefing (cheap/fast is fine). Chat always uses `model`.
+    task_models: { scan: "", light: "" },
+    // How the scan recommender batches the shortlist: 'single' = one call for all
+    // candidates (fastest/cheapest), 'grouped' = ~4 per call, 'per_candidate' = one
+    // call each (slowest, most rigorous — no cross-candidate bleed, no truncation risk).
+    scan_batching: "single",
+    // Optional failover tried once when the primary endpoint hard-fails (network error,
+    // 5xx, timeout). Empty base_url/api_key inherit the primary's values.
+    failover: { enabled: false, base_url: "", api_key: "", model: "" },
   },
 
   // --- What the user is willing to trade. The scanner NEVER strays outside this. ---
@@ -155,6 +166,7 @@ async function setBlock(key, value) {
 function publicView(s) {
   const c = JSON.parse(JSON.stringify(s));
   c.ai.api_key_set = !!c.ai.api_key; c.ai.api_key = c.ai.api_key ? "•••" : "";
+  if (c.ai.failover) c.ai.failover.api_key = c.ai.failover.api_key ? "•••" : "";
   c.providers.alpha_vantage_key = c.providers.alpha_vantage_key ? "•••" : "";
   c.providers.finnhub_key = c.providers.finnhub_key ? "•••" : "";
   c.providers.fmp_key = c.providers.fmp_key ? "•••" : "";

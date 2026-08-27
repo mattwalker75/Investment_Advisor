@@ -73,7 +73,7 @@ async function checkPositions(tradeId = null) {
   const { data } = await llm.chatJSON([
     { role: "system", content: VERDICT_PROMPT },
     { role: "user", content: `Positions (as of ${new Date().toISOString()}):\n${JSON.stringify(facts, null, 1)}` },
-  ]);
+  ], { task: "scan" });
 
   const verdicts = [];
   for (const v of (Array.isArray(data.verdicts) ? data.verdicts : [])) {

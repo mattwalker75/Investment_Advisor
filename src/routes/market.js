@@ -71,7 +71,7 @@ router.post("/news/ai-review", async (_req, res) => {
 "pos" = bullish/supportive, "neg" = bearish/risk, "neu" = neutral/unclear/informational.
 Respond ONLY with JSON: {"sentiments":[{"i":0,"s":"pos"}, ...]} — one entry per headline index.` },
       { role: "user", content: JSON.stringify(heads.map((h, i) => ({ i, title: h.title }))) },
-    ], { max_tokens: 2000 });
+    ], { max_tokens: 2000, task: "light" });
     const overlay = {};
     let changed = 0;
     for (const v of (Array.isArray(data.sentiments) ? data.sentiments : [])) {

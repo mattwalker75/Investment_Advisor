@@ -782,6 +782,19 @@ async function loadSettings() {
     <div class="frow"><label></label><input type="text" id="ai-model" value="${esc(s.ai.model)}" placeholder="or type a model name manually"></div>
     <div class="frow"><label>Temperature</label><input type="number" class="short" id="ai-temp" step="0.1" min="0" max="2" value="${s.ai.temperature}">
       <label style="width:auto">Max tokens</label><input type="number" class="short" id="ai-maxtok" step="500" value="${s.ai.max_tokens}"></div>
+    <div class="hint" style="margin-top:10px"><b>Per-task models</b> (optional): route heavy scan analysis and cheap tasks to different models. Empty = use the main model.</div>
+    <div class="frow"><label>Scan / health model</label><input type="text" id="ai-tier-scan" value="${esc((s.ai.task_models && s.ai.task_models.scan) || "")}" placeholder="e.g. a stronger reasoning model"></div>
+    <div class="frow"><label>Light-task model</label><input type="text" id="ai-tier-light" value="${esc((s.ai.task_models && s.ai.task_models.light) || "")}" placeholder="headline grading + briefing — fast/cheap is fine"></div>
+    <div class="frow"><label>Scan batching</label><select id="ai-batching">
+      <option value="single" ${s.ai.scan_batching === "single" || !s.ai.scan_batching ? "selected" : ""}>One call for the whole shortlist (default)</option>
+      <option value="grouped" ${s.ai.scan_batching === "grouped" ? "selected" : ""}>Groups of ~4 (steadier on local models)</option>
+      <option value="per_candidate" ${s.ai.scan_batching === "per_candidate" ? "selected" : ""}>One call per candidate (deepest, slowest)</option>
+    </select></div>
+    <div class="hint" style="margin-top:10px"><b>Failover</b> (optional): when the main endpoint hard-fails (network / 5xx / timeout), retry once here. Empty URL/key inherit the main settings.</div>
+    <div class="frow check"><input type="checkbox" id="ai-fo-on" ${s.ai.failover && s.ai.failover.enabled ? "checked" : ""}><label for="ai-fo-on"><b>Enable failover</b></label></div>
+    <div class="frow"><label>Failover URL</label><input type="text" id="ai-fo-url" value="${esc((s.ai.failover && s.ai.failover.base_url) || "")}" placeholder="empty = same endpoint"></div>
+    <div class="frow"><label>Failover key</label><input type="password" id="ai-fo-key" value="${esc((s.ai.failover && s.ai.failover.api_key) || "")}" placeholder="empty = same key"></div>
+    <div class="frow"><label>Failover model</label><input type="text" id="ai-fo-model" value="${esc((s.ai.failover && s.ai.failover.model) || "")}" placeholder="e.g. a cloud model as backup"></div>
     <div class="save-row"><button class="primary" id="save-ai">Save</button><button class="ghost" id="test-ai">Test connection</button><span id="note-ai"></span></div>
   </div>
 
@@ -944,7 +957,13 @@ async function loadSettings() {
   loadAiModels();   // auto-populate on opening Settings
   $("save-ai").addEventListener("click", async () => {
     try {
-      await api("/api/settings/ai", { method: "PUT", body: JSON.stringify({ base_url: $("ai-url").value.trim(), api_key: $("ai-key").value, model: $("ai-model").value.trim(), temperature: Number($("ai-temp").value), max_tokens: Number($("ai-maxtok").value) }) });
+      await api("/api/settings/ai", { method: "PUT", body: JSON.stringify({
+        base_url: $("ai-url").value.trim(), api_key: $("ai-key").value, model: $("ai-model").value.trim(),
+        temperature: Number($("ai-temp").value), max_tokens: Number($("ai-maxtok").value),
+        task_models: { scan: $("ai-tier-scan").value.trim(), light: $("ai-tier-light").value.trim() },
+        scan_batching: $("ai-batching").value,
+        failover: { enabled: $("ai-fo-on").checked, base_url: $("ai-fo-url").value.trim(), api_key: $("ai-fo-key").value, model: $("ai-fo-model").value.trim() },
+      }) });
       note("note-ai", "Saved ✓");
     } catch (e) { note("note-ai", e.message, false); }
   });
