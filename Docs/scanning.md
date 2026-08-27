@@ -15,19 +15,48 @@ fully-logged trade recommendations. Trigger: **⚡ Scan market**, `/scan` in cha
    computed with your parameters.
 3. **Shortlist (~12)** — setup score per symbol: 2 pts per threshold signal you defined
    (e.g. RSI under your buy level, MACD cross, Bollinger extremes), plus volume spikes,
-   5-day momentum, proximity to period high/low.
+   5-day momentum, proximity to period high/low — **confluence-weighted**: signals from
+   independent families (trend / momentum / mean-reversion / volume / divergence /
+   relative strength) earn a bonus, so three corroborating reads outrank three flavors of
+   the same oversold extreme. Beyond your configured indicators, every symbol also gets
+   three derived reads: **ATR percentile** (volatility regime), **RSI divergence** vs
+   recent price extremes, and **63-day relative strength vs SPY**.
 4. **Context gathering** — recent headlines (global + matched per candidate), stock &
    crypto Fear-and-Greed, congressional trades (with FMP key) + fresh 13F filers,
    **next earnings date** per stock, options chains (if options enabled).
 5. **AI analysis** — one strict-JSON request against your configured model with rules:
    respect asset classes and risk tolerance, entries near the real price, stops on the
    correct side, 1–3 laddered targets summing to 100%, honest confidence, options plays
-   only from your allowed strategies, and earnings-risk rules (below).
-6. **Validation** — the recommender clamps/rejects: symbols not in candidates, entry
-   zones >±25% from the real price, stop on the wrong side, empty ladders, ladder
-   percentages renormalized to 100, confidence below `min_confidence`, and
-   **reward:risk below `min_risk_reward`** (ladder-weighted reward vs entry→stop risk).
-   Single-leg option plays are enriched with chain economics (premium/breakeven/max loss).
+   only from your allowed strategies, and earnings-risk rules (below). The prompt also
+   carries the **market regime** (SPY vs 200-DMA + Fear & Greed → risk_on / neutral /
+   risk_off, with a be-more-selective rule for longs in risk_off) and — once at least ~8
+   recommendations have finished — the model's **own shadow-graded track record per
+   confidence bucket**, so it can correct a miscalibrated confidence scale.
+6. **Validation** — the gauntlet below. Hallucinations die here.
+
+## The validation gauntlet
+
+This is the tool's core safety guarantee: **no AI-produced number reaches the database
+unchecked.** Every recommendation — from a scan *or* saved via the advisor chat — passes
+through `validateRec` (`src/engine/recommender.js`), which applies, in order:
+
+| Check | Rule | On failure |
+| --- | --- | --- |
+| Symbol | Must be one of the candidates it was shown | dropped |
+| Side | `sell` while shorts are disabled | dropped |
+| Entry zone | Missing bounds default to the live price; low/high swapped if inverted | fixed |
+| Entry sanity | Zone must sit within **±25% of the real current price** | dropped |
+| Stop side | Below entry for buys, above for sells (defaults to ∓7% if missing) | fixed |
+| Targets | Only rungs beyond the entry on the correct side count; max 3; **≥1 required** | dropped if none |
+| Ladder sum | `sell_pct` values renormalized to exactly 100% | fixed |
+| Confidence | Clamped 0–1; must be ≥ `risk.min_confidence` | dropped |
+| Reward:risk | Ladder-weighted reward vs entry-mid→stop risk must be ≥ `risk.min_risk_reward` | dropped |
+| Options play | Strategy must be in your allowed list; single-leg plays enriched with real chain economics (premium/breakeven/max loss/IV) | play removed |
+| Duplicates | A same-side idea overlapping an active rec's entry zone (or within 5% of its midpoint) is refused | dropped |
+
+The same P&L rule grades every finished recommendation everywhere (tracker, offline gap
+backfill, manual complete): hit targets earn their rung's percentage, the remaining
+position exits at the residual price (stop / live price / last price).
 
 ## Anatomy of a recommendation
 

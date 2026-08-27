@@ -32,7 +32,7 @@ Local-only Express API (`127.0.0.1:8210`), no auth (single-user tool). All bodie
 | `GET /api/chart/:symbol?days=` | Candles + indicator series + latest snapshot (accepts `BTC`, `bitcoin`, `AAPL`…). |
 | `GET /api/quote/:symbol` | Live quote (same symbol resolution). |
 | `GET /api/search?q=` | Symbol/company search. |
-| `GET /api/market` | Dashboard snapshot: indexes, BTC/ETH, sentiment, headlines. |
+| `GET /api/market` | Dashboard snapshot: indexes, BTC/ETH, sentiment, headlines, and the market `regime` (risk_on / neutral / risk_off from SPY vs 200-DMA + Fear & Greed). |
 | `GET /api/whales` | Smart-money snapshot. |
 
 ## Watchlist
@@ -48,7 +48,7 @@ Local-only Express API (`127.0.0.1:8210`), no auth (single-user tool). All bodie
 | --- | --- |
 | `POST /api/recommendations/:id/revalidate` | AI re-checks an open rec against current data → valid / adjust / withdraw. |
 | `GET /api/briefing` · `POST /api/briefing` | Latest daily AI briefing / generate one now. |
-| `POST /api/backtest` | Simulate your indicator thresholds over the past year: `{symbols?, min_signals?}`. |
+| `POST /api/backtest` | Simulate your indicator thresholds over the past year: `{symbols?, min_signals?, exit_model? ('bracket'\|'ladder_trail'), slippage_pct?, fee_pct?, oos_split_pct?}`. Gap-aware fills; response includes portfolio metrics (`overall`: win rate, expectancy, profit factor, max drawdown) and an in-sample vs out-of-sample `walk_forward` split. |
 | `GET /api/portfolio/concentration` | Sector/asset concentration warnings for open positions. |
 | `GET /api/export/trades.csv` · `/api/export/recommendations.csv` | CSV downloads. |
 

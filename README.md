@@ -6,7 +6,12 @@ activity, and tells you **when to buy, when to sell, and where your stop loss be
 with every recommendation logged and honestly graded. It never places orders; it makes
 sure *you* never miss the moment.
 
-> **Research tool — not financial advice.** You decide, you trade, you own the outcomes.
+> ⚠️ **Research tool — NOT financial advice.** This software generates *ideas* from an
+> AI model and public data, both of which can be wrong, stale, or miscalibrated. Nothing
+> it outputs — recommendations, price levels, health verdicts, backtest results — is a
+> recommendation to buy or sell any security. Past (and simulated) performance does not
+> predict future results. Trading involves substantial risk of loss. You decide, you
+> trade, you own the outcomes.
 
 ## What it does
 

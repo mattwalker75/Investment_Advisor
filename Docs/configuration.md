@@ -22,6 +22,15 @@ Two layers:
 }
 ```
 
+## Environment variables (optional)
+
+| Variable | Meaning |
+| --- | --- |
+| `PORT` | Listen port (default `8210`; always bound to `127.0.0.1`). |
+| `ADVISOR_CONFIG` | Path to an alternate `ADVISOR_CONFIG.json` (useful for a scratch/test instance). |
+| `ADVISOR_ALLOWED_HOSTS` | Comma-separated extra hostnames the Host/Origin security guard accepts (e.g. a tailnet name behind a proxy). Localhost is always allowed. Add authentication before exposing beyond localhost. |
+| `ADVISOR_WEBHOOK_ALLOW_LOCAL` | `1` to let the notification webhook target loopback/link-local addresses (e.g. ntfy running on this same machine). Refused by default (SSRF guard). |
+
 ## Settings blocks (web UI → Settings)
 
 ### 🤖 AI (`ai`)

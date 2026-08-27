@@ -23,6 +23,17 @@ Configure in **Settings → 📐 Technical indicators** (enable + parameters + t
 Also always computed as context: 1/5/20-day % change, % off period high/low, and
 volume vs 20-day average.
 
+## Derived reads (always on)
+
+Three additional reads are computed regardless of which indicators you enable — each is
+a genuine edge the AI can cite, and each can emit a signal that feeds the setup score:
+
+| Read | What it says |
+| --- | --- |
+| **ATR percentile** | Where today's ATR-to-price ratio sits in the trailing window. ≥80th percentile flags a choppy high-risk regime ("size down"); ≤15th flags volatility compression ("coiling"). |
+| **RSI divergence** | Price makes a new extreme the oscillator doesn't confirm — a lower low with RSI holding higher (bullish) or a higher high with RSI rolling over (bearish). One of the few *leading* signals here. |
+| **Relative strength vs SPY** | 63-day (≈ one quarter) return minus SPY's. ±10% flags a leader/laggard — during scans, where SPY closes are fetched once as the benchmark. |
+
 ## How thresholds are used
 
 1. **Shortlisting** — each threshold hit ("RSI 31 ≤ 35 (user buy zone)", "MACD bullish

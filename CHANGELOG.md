@@ -4,7 +4,59 @@ All notable changes to Investment Advisor are tracked here.
 
 ## [Unreleased]
 
+### Security
+- 2026-08-27: **Cross-site request guard.** New `src/security.js` middleware validates
+  the `Host` header (DNS-rebinding protection) and, when present, the `Origin` header
+  (CSRF protection) on every request — a malicious web page can no longer POST to
+  `127.0.0.1:8210` or read API responses via a rebound hostname. Extra hostnames via
+  `ADVISOR_ALLOWED_HOSTS`. Verified live (evil Host/Origin → 403, same-origin → passes).
+- 2026-08-27: **Webhook SSRF guard.** Notification webhooks must be http(s) and may not
+  target loopback/link-local/cloud-metadata addresses (LAN hosts like self-hosted ntfy
+  stay allowed; `ADVISOR_WEBHOOK_ALLOW_LOCAL=1` opts back in). The test endpoint
+  surfaces the refusal reason.
+- 2026-08-27: **Advisor-chat history bounded server-side** (last 40 turns, 8k chars per
+  message, 24k for the live turn) — the client's re-sent localStorage history can no
+  longer balloon model cost. **`PUT /api/db/config` validates shape** (dialect/sqlite/
+  mysql field types) and no longer 500s on a config file missing the mysql block.
+
 ### Added
+- 2026-08-27: **Strategy engine deepened.** Three always-on derived indicator reads:
+  ATR percentile (volatility regime: chop warning ≥80th, compression ≤15th), RSI
+  divergence vs recent price extremes, and 63-day relative strength vs SPY (scanner
+  fetches the benchmark once per scan). Setup scoring is now confluence-weighted —
+  signals from independent families (trend/momentum/mean-reversion/volume/divergence/RS)
+  earn a bonus over repeated same-family extremes. New market-regime gate
+  (`src/engine/regime.js`): SPY vs its 200-DMA + Fear & Greed → risk_on/neutral/risk_off,
+  logged per scan, exposed on `GET /api/market`, and fed to the AI with an explicit
+  be-more-selective-in-risk_off rule. Calibration loop-back: once ≥8 recommendations
+  have finished, the scan prompt includes the model's own shadow-graded win rate per
+  confidence bucket so it can correct a miscalibrated confidence scale.
+- 2026-08-27: **Backtester overhaul.** Gap-aware fills (bars opening beyond a level fill
+  at the open), configurable slippage (default 0.1%/fill) and per-side fees, and a new
+  `ladder_trail` exit model that mirrors live trade management (30/40/30 ladder at 1R /
+  minRR·R / 1.75·minRR·R, breakeven after rung 1, ATR chandelier trail per your stops
+  settings) — so the backtest validates the strategy the tool actually recommends.
+  Portfolio-level metrics (profit factor, expectancy, avg win/loss, max drawdown,
+  compounded return) plus an in-sample vs out-of-sample walk-forward split (default:
+  last 30% of the window) to expose curve-fit thresholds. UI: exit-model + slippage
+  controls and the new metric tiles/split table.
+
+### Changed
+- 2026-08-27: **server.js split into domain routers** (`src/routes/`: settings,
+  recommendations, trades, market, engine) — the 690-line route file becomes a 46-line
+  bootstrap; smoke-tested end-to-end on a scratch DB. Shared helpers dedup'd into
+  `src/util.js` (JSON parse fallback ×7, crypto→Yahoo symbol mapping ×8, ladder-P&L
+  math ×3, CSV writer) and `db.upsertSql()` (SQLite/MySQL conflict-clause fork ×3).
+- 2026-08-27: **Performance pass.** Sector lookups in the recommendations list and the
+  concentration endpoint batch in parallel (were serial N+1 awaits); open option trades
+  fetch one chain per unique {symbol, expiry} instead of one per trade; an in-process
+  memo fronts `computeAll` (scanner/backtest/chart/health/revalidate/chat) and
+  `coingecko.topCoins` (60s); the UI's activity feed + desktop-alert watcher share one
+  `/api/events` poll loop — and the dashboard activity feed now stays live (45s).
+- 2026-08-27: **Docs refreshed**: architecture data-flow diagram + updated module tree,
+  "The validation gauntlet" section documenting every clamp/gate in `validateRec`, a
+  5-minute provider-key walkthrough, environment-variable reference, stronger README
+  risk disclaimer, and API/indicator doc updates for the new surface.
 - 2026-07-14: **Trade-class badges + type filter on Recommendations.** Every rec card
   (and dashboard rec row) now carries a prominent colored badge saying what you'd
   actually trade: 📈 STOCK (cyan), 🧾 OPTION (purple — any rec with an options play),

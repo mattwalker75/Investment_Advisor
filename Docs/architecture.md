@@ -7,15 +7,23 @@ Controlled by `./ADVISOR.sh` (`--setup/--start/--stop/--status/--logs/--init-db/
 ```
 ADVISOR.sh                     control script (start/stop/db init)
 ADVISOR_CONFIG.json            DB connection (the one file-based setting; gitignored)
-server.js                      Express + REST API + boot
+server.js                      Express bootstrap: middleware, router mounting, boot
 database/schema.{sqlite,mysql}.sql   first-class DDL, one file per dialect
 src/
-├── db/index.js                one async interface over better-sqlite3 / mysql2 (+ auto-migrations)
+├── db/index.js                one async interface over better-sqlite3 / mysql2 (+ auto-migrations, upsert helper)
 ├── settings.js                all other settings, stored in the DB, deep-merged over defaults
+├── security.js                Host/Origin guard (CSRF & DNS-rebinding) + webhook SSRF guard
+├── util.js                    shared helpers: JSON parse, crypto→Yahoo mapping, ladder P&L, CSV
 ├── resolve.js                 "AAPL" / "BTC" / "bitcoin" / "ETH-USD" -> the right instrument
 ├── events.js                  event log + notification fan-out
 ├── notify.js                  webhook delivery (ntfy / Discord / Slack auto-detected)
-├── scheduler.js               scan / tracking / health-check loops (settings-driven)
+├── scheduler.js               scan / tracking / health-check / briefing loops (settings-driven)
+├── routes/                    the REST API, one module per domain
+│   ├── settings.js            settings blocks, AI endpoint test/models, DB config, webhook test
+│   ├── recommendations.js     recommendation lifecycle + CSV export
+│   ├── trades.js              trades, health checks, concentration + CSV export
+│   ├── market.js              charts, quotes, search, dashboard snapshot, watchlist, events
+│   └── engine.js              scans, advisor chat, briefing, backtester, performance stats
 ├── providers/
 │   ├── yahoo.js               quotes, OHLCV, options chains, earnings dates (paced + cached)
 │   ├── coingecko.js           crypto universe (top-N by mcap) + symbol mapping
@@ -24,15 +32,50 @@ src/
 │   ├── whales.js              SEC EDGAR 13F filers + congressional trades (FMP key)
 │   └── cache.js               DB-backed fetch cache with stale-on-failure
 ├── indicators/index.js        RSI, MACD, SMA/EMA, Bollinger, Stochastic, ATR, ADX, OBV, VWAP
+│                              + derived reads: ATR percentile, RSI divergence, relative strength
 ├── ai/
 │   ├── llm.js                 OpenAI-compatible client (chat + tools + strict-JSON extraction)
-│   └── chat.js                the Advisor chat: 13-tool conversation loop
+│   └── chat.js                the Advisor chat: 14-tool conversation loop
 └── engine/
     ├── scanner.js             universe -> indicators -> shortlist -> AI -> validated recs
     ├── recommender.js         prompt contract + number validation (R:R gate, ladder rules)
+    ├── regime.js              market-wide risk_on/neutral/risk_off read (SPY trend + sentiment)
     ├── tracker.js             shadow-tracks recs; watches trades (alerts, stop suggestions)
-    └── health.js              AI position health checks (hold/tighten/partial/sell verdicts)
+    ├── health.js              AI position health checks (hold/tighten/partial/sell verdicts)
+    ├── briefing.js            daily AI morning briefing
+    └── backtest.js            threshold backtester (gap-aware fills, ladder+trail model, walk-forward)
 public/                        dark terminal UI (vanilla JS + lightweight-charts)
+```
+
+## Data-flow at a glance
+
+```
+                              ┌────────────────────── SCAN PIPELINE ──────────────────────┐
+ preferences ─► universe ─► OHLCV history ─► indicators ─► setup scores ─► shortlist (12)
+ (watchlist      (stocks +    (Yahoo, cached)  (+ SPY rel.     (confluence-     │
+  always in)      crypto)                       strength)       weighted)       ▼
+                                                              news · sentiment · whales ·
+                                                              earnings · options chains
+                                                                                │
+     market regime (SPY vs 200-DMA + F&G) ──────────────────────────────────────┤
+     calibration (own shadow-graded track record) ──────────────────────────────┤
+                                                                                ▼
+                                                                        AI (strict JSON)
+                                                                                │
+                                                                                ▼
+                                                    validateRec: clamp/gate every number
+                                                    (see "The validation gauntlet" in
+                                                     scanning.md) + duplicate guard
+                                                                                │
+                                                                                ▼
+                                              recommendations table (+ full input snapshot)
+
+                              ┌───────────────────── TRACKING (two cadences) ─────────────┐
+ every 30 min   shadow-track ALL recs:  open ─entry-touch─► tracking ─stop─► stopped
+                (gap backfill replays          │                      └final target─► target_hit
+                 candles after downtime)       └never entered in time─► expired
+ every 5 min    watch TAKEN trades: stop/target-cross alerts, option expiry countdown,
+                dynamic stop suggestions (breakeven after T1, ATR chandelier trail)
 ```
 
 ## How a recommendation is born

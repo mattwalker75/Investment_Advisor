@@ -19,19 +19,29 @@ gracefully — a dead feed or throttled endpoint never kills a scan.
 | Institutional 13F filers | SEC EDGAR "latest filings" (official) | no |
 | Congressional trades | Financial Modeling Prep | **yes — free key** (`fmp_key`) |
 
-## Recommended setup: two free keys
+## Recommended setup: two free keys (5-minute walkthrough)
 
 Yahoo throttles hard (hours-long IP blocks) — with these two free keys it drops out of
-the hot path entirely and becomes a background fallback:
+the hot path entirely and becomes a background fallback. Do this once:
 
-- **FMP** (financialmodelingprep.com, 250 req/day): stock daily candles + quote fallback
-  + company profiles + **congressional trades**.
-- **Finnhub** (finnhub.io, 60 req/min): high-frequency stock quotes (market strip, trade
-  tracking).
+1. **Finnhub** — go to [finnhub.io](https://finnhub.io), *Get free API key*, sign up,
+   copy the key from the dashboard.
+   *Unlocks:* high-frequency stock quotes (market strip, trade tracking) at 60 req/min.
+2. **FMP** — go to [financialmodelingprep.com](https://financialmodelingprep.com),
+   *Get my API key*, sign up (free tier), copy the key.
+   *Unlocks:* stock daily candles + quote fallback + company profiles/sectors +
+   **congressional trades** in the smart-money panel, at 250 req/day.
+3. In the app: **Settings → Data feeds**, paste both keys, **Save**. No restart needed —
+   the very next fetch uses them.
+4. (Optional) **Alpha Vantage** ([alphavantage.co](https://www.alphavantage.co)) as a
+   last-resort quote fallback — its free tier is 25 req/day, too small to be a primary.
 
 Crypto needs no keys at all (CoinGecko + Coinbase). The market strip uses SPY/QQQ/DIA
-ETF proxies so keyed sources can serve it. Alpha Vantage remains a last-resort quote
-fallback (its free tier is 25 req/day — too small to be a primary).
+ETF proxies so keyed sources can serve it.
+
+**How to tell it's working:** scans stop stalling on "history" steps, and the scan log
+no longer mentions Yahoo cooldowns. Without keys everything still works — just slower
+and more throttle-prone, riding the shared Yahoo pipeline.
 
 ## Caching & politeness
 
