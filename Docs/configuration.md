@@ -88,8 +88,26 @@ analysis, scanning, and tracking always run regardless of what's visible.
 - `browser` — desktop notifications while the page is open.
 - `webhook_url` — ONE URL, format auto-detected: `ntfy.sh/<topic>` (plain POST),
   Discord webhook (`{content}`), Slack webhook (`{text}`). Masked once saved.
-  *Recommended: free ntfy.sh topic + the ntfy phone app.*
 - `notify_on` — gates per category: `stops_targets`, `stop_suggestions`, `health`, `scans`, `briefing`.
+
+#### Phone push in 3 minutes (ntfy) — alerts with the browser CLOSED
+
+The whole point of the tracker is catching a stop being crossed while you're away; the
+webhook is what makes that reach your phone:
+
+1. Install the **ntfy** app ([ntfy.sh](https://ntfy.sh) — iOS/Android, free).
+2. In the app, **subscribe to a topic** — pick something unguessable, e.g.
+   `matt-advisor-x7k2q` (the topic name is the only secret).
+3. In the tool: **Settings → Notifications → Webhook URL** =
+   `https://ntfy.sh/matt-advisor-x7k2q`, then **Send test** — your phone should buzz.
+4. Tick the `notify_on` categories you want. Done — stops, targets, health verdicts, and
+   option-expiry countdowns now reach your phone with the app closed.
+
+Deliveries are **priority-mapped** so your phone treats them accordingly: a crossed stop
+or expiring option sends as `urgent` (ntfy can break through Do-Not-Disturb if you allow
+it), health verdicts and target hits as `high`, scans/briefings as `low`. Self-hosted
+ntfy on your LAN works too (use its URL); ntfy on this same machine needs
+`ADVISOR_WEBHOOK_ALLOW_LOCAL=1` (SSRF guard).
 
 ### 📡 Data feeds (`providers`)
 `news_feeds` (RSS URLs, one per line), optional keys: `fmp_key` (enables congressional
