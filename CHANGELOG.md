@@ -4,6 +4,37 @@ All notable changes to Investment Advisor are tracked here.
 
 ## [Unreleased]
 
+### Added (batch 2)
+- 2026-08-27: **AI plumbing upgrades.** JSON-producing calls now request structured
+  output (`response_format: json_object`) with per-endpoint feature detection; optional
+  **model failover** (Settings → AI): one retry against a configured fallback
+  endpoint/model when the primary hard-fails (network/5xx/timeout), key masked, streams
+  fail over only before the first token; **per-task model tiers** (`task_models.scan`
+  for recommender/revalidation/health, `.light` for headline grading + briefing);
+  **configurable scan batching** (`single` | `grouped` ~4 | `per_candidate`) with recs
+  merged best-confidence-first and live per-group progress in the scan log.
+- 2026-08-27: **Scan prompt compacted.** Market context slimmed (regime essentials, slim
+  active recs, capped lists) and candidates capped (4 headlines, options chains reduced
+  to ≤8 near-money strikes with essential leg fields), no pretty-printing — the full
+  objects still go into the stored input snapshot.
+- 2026-08-27: **Advisor chat: 9 new tools (23 total) + durable memory.** run_backtest,
+  check_position_health, revalidate_recommendation (the real engines),
+  get_portfolio_concentration (shared engine in `src/engine/portfolio.js`),
+  compare_symbols (2–5 side-by-side incl. RS vs SPY), manage_watchlist, update_trade
+  (confirm-first plan updates + stop_moved event), get_economic_calendar (new
+  `src/providers/calendar.js`, FMP high-impact US macro events), manage_memory —
+  short durable notes stored in the DB and injected into every conversation's system
+  prompt. Tool results are no longer blunt-cut at 14k chars: structural shrink (drop the
+  large input snapshot, cap arrays/strings) with a marked-partial last resort.
+- 2026-08-27: **Notification bridge finished.** ntfy deliveries carry per-event
+  priorities (stop crossed/option expiring = urgent, health + target hits = high,
+  scans/briefings = low) and tags; docs gained a 3-minute phone-push walkthrough.
+- 2026-08-27: **Dependencies bumped & tested**: express 4→5, better-sqlite3 11→13,
+  mysql2 3.24 (full scratch-DB smoke green, `npm audit` 0). Deliberate pins kept:
+  yahoo-finance2 2.13.3 (incomplete ESM rewrite upstream) and lightweight-charts 4.x
+  (v5 is a series-API rewrite — bump alongside a chart-feature pass with browser
+  verification).
+
 ### Security
 - 2026-08-27: **Cross-site request guard.** New `src/security.js` middleware validates
   the `Host` header (DNS-rebinding protection) and, when present, the `Origin` header

@@ -40,6 +40,14 @@ Two layers:
 | `api_key` | Required by OpenAI; empty for local. Masked in the UI once saved. |
 | `model` | Pick from the live dropdown (↻ Load models queries the endpoint) or type one. |
 | `temperature`, `max_tokens` | Generation knobs (0.3 / 4000 default). |
+| `task_models.scan` | Optional model override for the heavy reasoning tasks: scan recommender, revalidation, health checks. Empty = `model`. |
+| `task_models.light` | Optional cheap/fast model for headline grading + the daily briefing. Empty = `model`. |
+| `scan_batching` | How the recommender batches the shortlist: `single` (one call, default), `grouped` (~4 candidates per call — steadier on local models), `per_candidate` (deepest: no cross-candidate bleed or truncation risk, slowest). Grouped/per-candidate runs show live per-group progress in the scan log. |
+| `failover` | Optional `{enabled, base_url, api_key, model}` tried **once** when the primary endpoint hard-fails (network error, 5xx, timeout). Empty URL/key inherit the primary's. Off by default; the key is masked like the others. |
+
+Structured output: JSON-producing calls request `response_format: json_object`
+automatically; endpoints that reject it are detected and it's dropped for them (the
+robust JSON extractor remains the safety net either way).
 
 ### 🎯 Preferences (`preferences`)
 - `asset_classes` — `{stocks, crypto}`; untick one to go single-class. The scanner never
