@@ -80,9 +80,24 @@ async function buildUniverse(prefs) {
 }
 
 // Setup score: how "notable" a chart is per the USER'S indicator thresholds.
+// Confluence-weighted: three signals from INDEPENDENT families (trend + momentum +
+// volume agreeing) outrank three flavors of the same oversold reading, so the shortlist
+// favors setups with corroboration over one-dimensional extremes.
 function setupScore(latest) {
-  let score = (latest.signals || []).length * 2;
-  if (latest.volume_vs_20d_avg && latest.volume_vs_20d_avg > 1.5) score += 1;   // volume spike
+  const sigs = latest.signals || [];
+  const families = new Set();
+  for (const s of sigs) {
+    if (/uptrend|downtrend|\(trending\)/.test(s)) families.add("trend");
+    if (/^RSI |MACD|Stochastic/.test(s)) families.add("momentum");
+    if (/Bollinger|Volatility compression/.test(s)) families.add("meanrev");
+    if (/divergence/.test(s)) families.add("divergence");
+    if (/Relative-strength/.test(s)) families.add("rel_strength");
+  }
+  let score = sigs.length * 2;
+  if (latest.volume_vs_20d_avg && latest.volume_vs_20d_avg > 1.5) { score += 1; families.add("volume"); }  // volume spike
+  else if (latest.obv_20d_trend === "rising") families.add("volume");
+  if (families.size >= 2) score += 2;                   // confluence bonus: independent
+  if (families.size >= 3) score += 3;                   // families agreeing compound
   if (latest.change_5d_pct != null && Math.abs(latest.change_5d_pct) >= 5) score += 1;  // in motion
   if (latest.pct_off_period_low != null && latest.pct_off_period_low <= 5) score += 1;  // near lows
   if (latest.pct_off_period_high != null && latest.pct_off_period_high >= -2) score += 1; // near highs
@@ -110,12 +125,13 @@ async function runScan(trigger = "manual") {
     if (!universe.length) throw new Error("scan universe is empty — check Preferences");
     say(`universe: ${universe.length} symbols (stocks:${universe.filter(u => u.asset_type === "stock").length}, crypto:${universe.filter(u => u.asset_type === "crypto").length})`);
 
-    // 2. History + indicators
+    // 2. History + indicators (SPY closes fetched once as the relative-strength benchmark)
     running.step = `fetching history for ${universe.length} symbols`;
+    const benchCloses = await yahoo.history("SPY", 365).then((c) => c.map((b) => b.close)).catch(() => null);
     const enriched = (await pool(universe, 4, async (u) => {
       const candles = await yahoo.history(u.symbol, 365);
       if (!candles || candles.length < 60) return null;    // not enough data to analyze
-      const { latest } = indicators.computeAllCached(`scan:${u.symbol}`, candles, s.indicators);
+      const { latest } = indicators.computeAllCached(`scan:${u.symbol}`, candles, s.indicators, benchCloses ? { benchCloses } : {});
       const q = await yahoo.quote(u.symbol).catch(() => null);
       return {
         ...u,
@@ -160,10 +176,13 @@ async function runScan(trigger = "manual") {
     // 5. AI analysis
     running.step = "AI analysis";
     say(`asking ${s.ai.model} for recommendations...`);
+    const regime = await require("./regime").marketRegime().catch(() => null);
+    if (regime) say(`market regime: ${regime.regime}${regime.spy_vs_200dma_pct != null ? ` (SPY ${regime.spy_vs_200dma_pct > 0 ? "+" : ""}${regime.spy_vs_200dma_pct}% vs 200-DMA)` : ""}`);
     const activeRecs = await db.all("SELECT symbol, side, entry_low, entry_high, status FROM recommendations WHERE status IN ('open','tracking')");
     const context = {
       market: {
         as_of: new Date().toISOString(),
+        regime,
         active_recommendations: activeRecs,
         sentiment: senti,
         top_headlines: heads.slice(0, 15).map((h) => h.title),

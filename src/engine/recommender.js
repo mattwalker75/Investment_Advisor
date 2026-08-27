@@ -41,6 +41,11 @@ prices, news, or filings.
 
 RULES:
 - Recommend ONLY symbols from the provided candidates list.
+- The market context includes a top-level "regime" read (SPY vs its 200-DMA + sentiment).
+  In risk_off, long ideas face a market-wide headwind: demand extra confirmation (relative
+  strength, volume, divergence), lower your confidence accordingly, and prefer fewer/no
+  ideas over forced ones. In risk_on the tailwind favors longs. Cite the regime when it
+  shapes your call.
 - The market context includes active_recommendations (ideas already being tracked). Do NOT
   repeat them: skip those symbols unless your idea is MATERIALLY different (opposite side,
   or an entry zone that does not overlap and sits ≥5% away). Prefer fresh symbols.
@@ -196,11 +201,35 @@ async function duplicateOf(rec) {
   return null;
 }
 
+// Calibration loop-back: the shadow-tracked outcomes grade every past recommendation,
+// so the model can be shown ITS OWN track record per confidence bucket and correct a
+// miscalibrated confidence scale (e.g. "your 0.7s only win 45%"). Returns a one-line
+// summary for the scan prompt, or null when there isn't enough finished history.
+async function calibrationSummary() {
+  const db = require("../db");
+  const rows = await db.all("SELECT confidence, outcome FROM recommendations WHERE status IN ('stopped','target_hit')").catch(() => []);
+  const fin = rows.map((r) => ({ conf: Number(r.confidence), o: J(r.outcome, {}) || {} })).filter((r) => r.o.pnl_pct != null && isFinite(r.conf));
+  if (fin.length < 8) return null;                       // too little history to mean anything
+  const buckets = [[0, 0.6], [0.6, 0.7], [0.7, 0.8], [0.8, 1.01]];
+  const parts = [];
+  for (const [lo, hi] of buckets) {
+    const b = fin.filter((r) => r.conf >= lo && r.conf < hi);
+    if (b.length < 3) continue;
+    const winRate = Math.round((b.filter((r) => r.o.pnl_pct > 0).length / b.length) * 100);
+    const avg = b.reduce((s, r) => s + r.o.pnl_pct, 0) / b.length;
+    parts.push(`conf ${lo.toFixed(1)}–${hi > 1 ? "1.0" : hi.toFixed(1)}: ${winRate}% win, avg ${avg >= 0 ? "+" : ""}${avg.toFixed(1)}% (n=${b.length})`);
+  }
+  if (!parts.length) return null;
+  return `YOUR TRACK RECORD (all past recommendations, shadow-graded against real prices): ${parts.join("; ")}. ` +
+    "Calibrate confidence honestly against this — if a bucket underperforms its number, your scale needs correcting downward.";
+}
+
 // context = { market: {...}, candidates: [{symbol, asset_type, name, price, indicators, headlines, smart_money, options_chain?}] }
 async function recommend(context) {
   const prefs = settings.getSync().preferences;
+  const calib = await calibrationSummary().catch(() => null);
   const { data, usage, model } = await llm.chatJSON([
-    { role: "system", content: systemPrompt(prefs) },
+    { role: "system", content: systemPrompt(prefs) + (calib ? `\n\n${calib}` : "") },
     { role: "user", content: userPrompt(context) },
   ]);
   const candidateMap = {};
@@ -277,4 +306,4 @@ Respond ONLY with JSON: {"verdict":"valid","note":"2-3 sentences grounded in the
   return { verdict, note, updated };
 }
 
-module.exports = { recommend, revalidate, validateRec, duplicateOf };
+module.exports = { recommend, revalidate, validateRec, duplicateOf, calibrationSummary };

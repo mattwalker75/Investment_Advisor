@@ -587,12 +587,13 @@ app.get("/api/search", async (req, res) => {
 });
 // Dashboard market snapshot: indexes + BTC/ETH + sentiment + headlines.
 app.get("/api/market", async (_req, res) => {
-  const [quotes, senti, heads] = await Promise.all([
+  const [quotes, senti, heads, regime] = await Promise.all([
     yahoo.quotes(["SPY", "QQQ", "DIA", "BTC-USD", "ETH-USD"]).catch(() => ({})),
     sentiment.snapshot().catch(() => ({})),
     news.headlines(24, 20).catch(() => []),
+    require("./src/engine/regime").marketRegime().catch(() => null),
   ]);
-  res.json({ quotes, sentiment: senti, headlines: heads });
+  res.json({ quotes, sentiment: senti, headlines: heads, regime });
 });
 app.get("/api/whales", async (_req, res) => {
   try { res.json(await whales.snapshot()); } catch (e) { res.status(502).json({ error: e.message }); }

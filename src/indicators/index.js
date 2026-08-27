@@ -160,7 +160,9 @@ const round = (v, dp = 4) => (v == null || Number.isNaN(v) ? null : +v.toFixed(d
 // Compute every ENABLED indicator (per user settings) and return:
 //  - series: full arrays for charting overlays
 //  - latest: the compact snapshot (numbers + human-readable signals) fed to the AI
-function computeAll(candles, cfg) {
+// opts.benchCloses (optional): benchmark close series (e.g. SPY) — enables the
+// relative-strength read below.
+function computeAll(candles, cfg, opts = {}) {
   const closes = candles.map((c) => c.close);
   const price = last(closes);
   const series = {}, latest = { price: round(price, 4) };
@@ -249,6 +251,52 @@ function computeAll(candles, cfg) {
     if (avg20 > 0) latest.volume_vs_20d_avg = round(vols[n - 1] / avg20, 2);
   }
 
+  // --- Derived reads (always on — cheap, and each is a real edge the AI can cite) ---
+
+  // Volatility regime: where today's ATR-to-price ratio sits in the trailing window.
+  // High percentile = choppy/high-risk tape where breakout entries fail more often.
+  if (series.atr && n >= 40) {
+    const ratios = [];
+    for (let i = 0; i < n; i++) if (series.atr[i] != null && closes[i]) ratios.push(series.atr[i] / closes[i]);
+    const cur = ratios[ratios.length - 1];
+    if (cur != null && ratios.length >= 40) {
+      latest.atr_percentile = Math.round((ratios.filter((r2) => r2 < cur).length / ratios.length) * 100);
+      if (latest.atr_percentile >= 80) signals.push(`High-volatility regime: ATR in the ${latest.atr_percentile}th percentile of the period (expect chop, size down)`);
+      if (latest.atr_percentile <= 15) signals.push(`Volatility compression: ATR in the ${latest.atr_percentile}th percentile (coiling — breakouts travel further from here)`);
+    }
+  }
+
+  // RSI divergence: price extreme not confirmed by momentum. Compares the extreme of the
+  // last ~2 weeks against the extreme of the prior ~6 weeks; a fading-oscillator
+  // disagreement is one of the few leading (not lagging) signals in the toolbox.
+  if (series.rsi && n >= 45) {
+    const extremes = (from, to) => {
+      let iLow = -1, iHigh = -1;
+      for (let i = from; i < to; i++) {
+        if (iLow < 0 || candles[i].low < candles[iLow].low) iLow = i;
+        if (iHigh < 0 || candles[i].high > candles[iHigh].high) iHigh = i;
+      }
+      return { iLow, iHigh };
+    };
+    const older = extremes(n - 40, n - 12), recent = extremes(n - 12, n);
+    const rl1 = series.rsi[older.iLow], rl2 = series.rsi[recent.iLow];
+    if (rl1 != null && rl2 != null && candles[recent.iLow].low < candles[older.iLow].low && rl2 > rl1 + 2)
+      signals.push("Bullish divergence: price made a lower low but RSI held higher (selling momentum fading)");
+    const rh1 = series.rsi[older.iHigh], rh2 = series.rsi[recent.iHigh];
+    if (rh1 != null && rh2 != null && candles[recent.iHigh].high > candles[older.iHigh].high && rh2 < rh1 - 2)
+      signals.push("Bearish divergence: price made a higher high but RSI rolled over (buying momentum fading)");
+  }
+
+  // Relative strength vs the benchmark (63 trading days ≈ one quarter): leaders tend to
+  // keep leading. Only computed when the caller supplies benchmark closes.
+  if (opts.benchCloses && opts.benchCloses.length >= 64 && n >= 64) {
+    const ret63 = (arr) => ((arr[arr.length - 1] - arr[arr.length - 64]) / arr[arr.length - 64]) * 100;
+    const rs = ret63(closes) - ret63(opts.benchCloses);
+    latest.rs_vs_benchmark_63d_pct = round(rs, 2);
+    if (rs >= 10) signals.push(`Relative-strength leader: +${rs.toFixed(0)}% vs SPY over ~3 months`);
+    else if (rs <= -10) signals.push(`Relative-strength laggard: ${rs.toFixed(0)}% vs SPY over ~3 months`);
+  }
+
   latest.signals = signals;
   return { series, latest };
 }
@@ -260,12 +308,13 @@ function computeAll(candles, cfg) {
 // Callers must treat the returned series/latest as read-only (they are shared).
 const MEMO_MAX = 400;
 const memo = new Map();
-function computeAllCached(key, candles, cfg) {
+function computeAllCached(key, candles, cfg, opts = {}) {
   const lastBar = candles.length ? candles[candles.length - 1] : null;
-  const stamp = `${candles.length}:${lastBar ? `${lastBar.time}:${lastBar.close}` : ""}:${JSON.stringify(cfg)}`;
+  const bench = opts.benchCloses ? `${opts.benchCloses.length}:${opts.benchCloses[opts.benchCloses.length - 1]}` : "";
+  const stamp = `${candles.length}:${lastBar ? `${lastBar.time}:${lastBar.close}` : ""}:${bench}:${JSON.stringify(cfg)}`;
   const hit = memo.get(key);
   if (hit && hit.stamp === stamp) return hit.result;
-  const result = computeAll(candles, cfg);
+  const result = computeAll(candles, cfg, opts);
   memo.delete(key);                                     // re-insert = move to newest
   memo.set(key, { stamp, result });
   if (memo.size > MEMO_MAX) memo.delete(memo.keys().next().value);   // evict oldest
