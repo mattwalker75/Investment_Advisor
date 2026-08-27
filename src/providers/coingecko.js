@@ -16,8 +16,23 @@ async function fetchJson(url) {
 // Top N coins by market cap (stablecoins filtered out — you don't trade USDT for alpha).
 const STABLES = new Set(["usdt", "usdc", "dai", "busd", "tusd", "usde", "fdusd", "usds", "pyusd", "usdp"]);
 
+// In-process memo in front of the DB cache: topCoins() is hit by nearly every
+// resolveAsset() call, so a scan or chat burst was paying a DB round-trip + JSON.parse
+// of a ~100-coin array each time. 60s of process memory removes that without touching
+// the DB cache's freshness semantics.
+const MEMO_TTL_MS = 60 * 1000;
+const topMemo = new Map();   // n -> { at, data }
+
 async function topCoins(n = 25) {
+  const hit = topMemo.get(n);
+  if (hit && Date.now() - hit.at < MEMO_TTL_MS) return hit.data;
   const ttlMs = (settings.getSync().providers.cache_minutes.sentiment || 60) * 60 * 1000;
+  const data = await topCoinsUncached(n, ttlMs);
+  topMemo.set(n, { at: Date.now(), data });
+  return data;
+}
+
+async function topCoinsUncached(n, ttlMs) {
   return cached(`cg:top:${n}`, ttlMs, async () => {
     const list = await fetchJson(`${BASE}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=${Math.min(n + 15, 100)}&page=1&price_change_percentage=24h,7d`);
     return list

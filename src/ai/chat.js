@@ -83,7 +83,7 @@ async function execTool(name, args = {}) {
       if (!a) return { error: "symbol required" };
       const candles = await yahoo.history(a.yahoo, Math.min(730, args.days || 365));
       if (!candles || candles.length < 30) return { error: "not enough price history for " + a.yahoo };
-      const { latest } = indicators.computeAll(candles, s.indicators);
+      const { latest } = indicators.computeAllCached(`an:${a.yahoo}:${args.days || 365}`, candles, s.indicators);
       const next_earnings = a.asset_type === "stock" ? await yahoo.nextEarnings(a.yahoo).catch(() => null) : null;
       return { symbol: a.display, name: a.name, asset_type: a.asset_type, candles_analyzed: candles.length, next_earnings, ...latest };
     }

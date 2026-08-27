@@ -39,7 +39,7 @@ async function backtestSymbol(symbol, cfg, minRR, minSignals) {
   const candles = await yahoo.history(symbol, 400);
   if (!candles || candles.length < 120) return null;
   const closes = candles.map((c) => c.close);
-  const { series } = indicators.computeAll(candles, cfg);
+  const { series } = indicators.computeAllCached(`bt:${symbol}`, candles, cfg);
   const atr = series.atr || indicators.atr(candles, 14);
 
   const trades = [];

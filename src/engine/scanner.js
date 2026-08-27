@@ -115,7 +115,7 @@ async function runScan(trigger = "manual") {
     const enriched = (await pool(universe, 4, async (u) => {
       const candles = await yahoo.history(u.symbol, 365);
       if (!candles || candles.length < 60) return null;    // not enough data to analyze
-      const { latest } = indicators.computeAll(candles, s.indicators);
+      const { latest } = indicators.computeAllCached(`scan:${u.symbol}`, candles, s.indicators);
       const q = await yahoo.quote(u.symbol).catch(() => null);
       return {
         ...u,

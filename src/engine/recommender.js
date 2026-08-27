@@ -233,7 +233,7 @@ async function revalidate(recId) {
     yahoo.history(ySym, 365),
     news.headlines(48, 60).catch(() => []),
   ]);
-  const { latest } = indicators.computeAll(candles, s.indicators);
+  const { latest } = indicators.computeAllCached(`an:${ySym}`, candles, s.indicators);
   const earnings = r.asset_type === "stock" ? await yahoo.nextEarnings(ySym).catch(() => null) : null;
 
   const llm = require("../ai/llm");

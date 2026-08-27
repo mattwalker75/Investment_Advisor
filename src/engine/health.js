@@ -22,7 +22,7 @@ async function positionFacts(t, heads) {
   let ind = null;
   try {
     const candles = await yahoo.history(yahooSym(t), 365);
-    ind = indicators.computeAll(candles, settings.getSync().indicators).latest;
+    ind = indicators.computeAllCached(`an:${yahooSym(t)}`, candles, settings.getSync().indicators).latest;
   } catch (_) {}
   const dir = t.side === "sell" ? -1 : 1;
   const od = J(t.option_details, null);

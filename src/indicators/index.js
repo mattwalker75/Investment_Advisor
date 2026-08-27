@@ -253,4 +253,23 @@ function computeAll(candles, cfg) {
   return { series, latest };
 }
 
-module.exports = { sma, ema, rsi, macd, bollinger, stochastic, atr, adx, obv, vwap, computeAll };
+// In-process memo over computeAll: scans, backtests, health checks, and chart loads
+// repeatedly recompute the SAME (candles, cfg) while the history cache is warm. Keyed by
+// a caller-supplied identity (usually the symbol + view); validated by a cheap stamp
+// (candle count + last bar + cfg) so new candles or changed settings always recompute.
+// Callers must treat the returned series/latest as read-only (they are shared).
+const MEMO_MAX = 400;
+const memo = new Map();
+function computeAllCached(key, candles, cfg) {
+  const lastBar = candles.length ? candles[candles.length - 1] : null;
+  const stamp = `${candles.length}:${lastBar ? `${lastBar.time}:${lastBar.close}` : ""}:${JSON.stringify(cfg)}`;
+  const hit = memo.get(key);
+  if (hit && hit.stamp === stamp) return hit.result;
+  const result = computeAll(candles, cfg);
+  memo.delete(key);                                     // re-insert = move to newest
+  memo.set(key, { stamp, result });
+  if (memo.size > MEMO_MAX) memo.delete(memo.keys().next().value);   // evict oldest
+  return result;
+}
+
+module.exports = { sma, ema, rsi, macd, bollinger, stochastic, atr, adx, obv, vwap, computeAll, computeAllCached };

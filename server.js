@@ -226,14 +226,13 @@ app.get("/api/portfolio/concentration", async (_req, res) => {
   try {
     const open = await db.all("SELECT symbol, asset_type FROM trades WHERE status='open'");
     if (open.length < 2) return res.json({ positions: open.length, warnings: [] });
+    // Sector lookups in parallel per unique non-crypto symbol (was serial in the loop).
+    const stockSyms = [...new Set(open.filter((t) => t.asset_type !== "crypto").map((t) => t.symbol))];
+    const sectors = Object.fromEntries(await Promise.all(
+      stockSyms.map((sym) => yahoo.sector(sym).then((s) => [sym, s.sector || null]).catch(() => [sym, null]))));
     const buckets = {};
     for (const t of open) {
-      let key;
-      if (t.asset_type === "crypto") key = "Crypto";
-      else {
-        const s = await yahoo.sector(t.symbol).catch(() => ({ sector: null }));
-        key = s.sector || "Unknown sector";
-      }
+      const key = t.asset_type === "crypto" ? "Crypto" : (sectors[t.symbol] || "Unknown sector");
       buckets[key] = buckets[key] || []; buckets[key].push(t.symbol);
     }
     const warnings = [];
@@ -331,14 +330,18 @@ app.get("/api/recommendations", async (req, res) => {
   // Live context for ACTIONABLE recs: current price (in-zone math) + sector for stocks.
   const act = out.filter((r) => ["open", "tracking"].includes(r.status));
   if (act.length) {
-    const ysym = (r) => (r.asset_type === "crypto" && !r.symbol.includes("-") ? r.symbol + "-USD" : r.symbol);
-    const qs = await yahoo.quotes([...new Set(act.map(ysym))]).catch(() => ({}));
+    // Quotes in one batch; sector lookups fan out in parallel per UNIQUE stock symbol
+    // (they were serial awaits in a loop — each one a throttle-prone provider call).
+    const stockSyms = [...new Set(act.filter((r) => r.asset_type === "stock").map((r) => r.symbol))];
+    const [qs, sectorPairs] = await Promise.all([
+      yahoo.quotes([...new Set(act.map(yahooSym))]).catch(() => ({})),
+      Promise.all(stockSyms.map((sym) => yahoo.sector(sym).then((s) => [sym, s.sector || null]).catch(() => [sym, null]))),
+    ]);
+    const sectors = Object.fromEntries(sectorPairs);
     for (const r of act) {
-      const q = qs[ysym(r)];
+      const q = qs[yahooSym(r)];
       if (q && q.price != null) r.live_price = q.price;
-      if (r.asset_type === "stock") {
-        try { r.sector = (await yahoo.sector(r.symbol)).sector || null; } catch (_) {}
-      }
+      if (r.asset_type === "stock") r.sector = sectors[r.symbol] ?? null;
     }
   }
   res.json(out);
@@ -433,8 +436,19 @@ app.get("/api/trades", async (req, res) => {
   // off the current chain premium at their strike/expiry (contract multiplier 100).
   const open = out.filter((t) => t.status === "open");
   if (open.length) {
-    const syms = [...new Set(open.filter((t) => t.asset_type !== "option").map((t) => (t.asset_type === "crypto" && !t.symbol.includes("-") ? `${t.symbol}-USD` : t.symbol)))];
-    const quotes = syms.length ? await yahoo.quotes(syms).catch(() => ({})) : {};
+    const syms = [...new Set(open.filter((t) => t.asset_type !== "option").map(yahooSym))];
+    // Option chains: fetch once per unique {symbol, expiry} in parallel — multiple
+    // contracts on the same underlying/expiry were each refetching the chain serially.
+    const optTrades = open.filter((t) => t.asset_type === "option" && t.option_details);
+    const chainKeys = [...new Set(optTrades.map((t) => `${t.symbol} ${t.option_details.expiry || ""}`))];
+    const [quotes, chainPairs] = await Promise.all([
+      syms.length ? yahoo.quotes(syms).catch(() => ({})) : {},
+      Promise.all(chainKeys.map((k) => {
+        const [sym, expiry] = k.split(" ");
+        return yahoo.optionsChain(sym, 365, expiry || undefined).then((c) => [k, c]).catch(() => [k, null]);
+      })),
+    ]);
+    const chains = Object.fromEntries(chainPairs);
     for (const t of open) {
       const soldQty = t.exits.reduce((s, e) => s + (e.qty || 0), 0);
       const remaining = t.qty - soldQty;
@@ -442,7 +456,7 @@ app.get("/api/trades", async (req, res) => {
       if (t.asset_type === "option" && t.option_details) {
         try {
           const od = t.option_details;
-          const chain = await yahoo.optionsChain(t.symbol, 365, od.expiry);
+          const chain = chains[`${t.symbol} ${od.expiry || ""}`];
           const leg = chain && (od.type === "put" ? chain.puts : chain.calls || []).find((o) => Math.abs(o.strike - od.strike) < 0.01);
           if (leg) {
             const mid = leg.bid && leg.ask ? (leg.bid + leg.ask) / 2 : leg.last;
@@ -457,7 +471,7 @@ app.get("/api/trades", async (req, res) => {
         } catch (_) {}
         continue;
       }
-      const q = quotes[t.asset_type === "crypto" && !t.symbol.includes("-") ? `${t.symbol}-USD` : t.symbol];
+      const q = quotes[yahooSym(t)];
       if (q && q.price != null) {
         t.last_price = q.price;
         const realized = t.exits.reduce((s, e) => s + dir * (e.price - t.entry_price) * (e.qty || 0), 0);
@@ -557,7 +571,7 @@ app.get("/api/chart/:symbol", async (req, res) => {
     // Charts are fresh-or-nothing: never render stale candles as if they were current.
     const candles = await yahoo.history(a.yahoo, days, interval, { allowStale: false });
     const s = settings.getSync();
-    const { series, latest } = indicators.computeAll(candles, s.indicators);
+    const { series, latest } = indicators.computeAllCached(`chart:${a.yahoo}:${days}:${interval}`, candles, s.indicators);
     res.json({ symbol: a.yahoo, display: a.display, name: a.name, asset_type: a.asset_type, interval, candles, series, latest });
   } catch (e) { res.status(502).json({ error: e.message }); }
 });
