@@ -31,4 +31,10 @@ function ladderPnl(entry, targetsHit, targets, residualPrice, side) {
   return +pnl.toFixed(2);
 }
 
-module.exports = { J, yahooSym, pctChange, ladderPnl };
+// Minimal CSV writer for the export endpoints (RFC-4180 quoting).
+function toCsv(rows, cols) {
+  const escape = (v) => v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
+  return [cols.join(","), ...rows.map((r) => cols.map((c) => escape(r[c])).join(","))].join("\n");
+}
+
+module.exports = { J, yahooSym, pctChange, ladderPnl, toCsv };
