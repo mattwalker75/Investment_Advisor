@@ -69,14 +69,48 @@ Respond with ONLY a JSON object exactly matching this schema (no prose, no markd
 ${SCHEMA_EXAMPLE}`;
 }
 
-function userPrompt(context) {
+// --- Prompt compaction: the model gets everything decision-relevant, none of the bulk.
+// The FULL candidate/market objects still go into the stored input snapshot — only the
+// prompt is compacted (a 12-candidate prompt was large enough to slow local models and
+// risk truncation).
+function compactMarket(m) {
+  return {
+    as_of: m.as_of,
+    regime: m.regime ? { regime: m.regime.regime, spy_vs_200dma_pct: m.regime.spy_vs_200dma_pct, note: m.regime.note } : undefined,
+    active_recommendations: (m.active_recommendations || []).map((r) => ({ symbol: r.symbol, side: r.side, entry: [r.entry_low, r.entry_high], status: r.status })),
+    sentiment: m.sentiment,
+    top_headlines: (m.top_headlines || []).slice(0, 12),
+    congress_most_traded: (m.congress_most_traded || []).slice(0, 8),
+    recent_13f_filers: (m.recent_13f_filers || []).slice(0, 8),
+  };
+}
+function compactCandidate(c) {
+  const out = {
+    symbol: c.symbol, asset_type: c.asset_type, name: c.name, price: c.price,
+    indicators: c.indicators,                       // `latest` is already the compact snapshot
+    headlines: (c.headlines || []).slice(0, 4),
+  };
+  if (c.smart_money) out.smart_money = c.smart_money;
+  if (c.next_earnings) out.next_earnings = c.next_earnings;
+  if (c.options_chain) {
+    // ≤8 strikes per side nearest the money, essential leg fields only.
+    const near = (legs) => (legs || [])
+      .slice().sort((a, b) => Math.abs(a.strike - c.price) - Math.abs(b.strike - c.price)).slice(0, 8)
+      .sort((a, b) => a.strike - b.strike)
+      .map((l) => ({ strike: l.strike, bid: l.bid, ask: l.ask, iv: l.iv, oi: l.oi }));
+    out.options_chain = { expiry: c.options_chain.expiry, calls: near(c.options_chain.calls), puts: near(c.options_chain.puts) };
+  }
+  return out;
+}
+
+function userPrompt(marketCompact, candidatesCompact) {
   return `Analyze the following live market data and produce your recommendations.
 
 ## Market context
-${JSON.stringify(context.market, null, 1)}
+${JSON.stringify(marketCompact)}
 
 ## Candidates (each with current price, computed indicators, the user's threshold signals, related headlines, and smart-money activity)
-${JSON.stringify(context.candidates, null, 1)}
+${JSON.stringify(candidatesCompact)}
 
 Remember: JSON only, symbols only from candidates, sell_pct sums to 100.`;
 }
@@ -225,20 +259,47 @@ async function calibrationSummary() {
 }
 
 // context = { market: {...}, candidates: [{symbol, asset_type, name, price, indicators, headlines, smart_money, options_chain?}] }
-async function recommend(context) {
-  const prefs = settings.getSync().preferences;
+// onProgress(message): live progress line per AI call — the scanner wires it into the
+// scan log, so grouped/per-candidate runs are watchable instead of opaque.
+// Batching (Settings → AI → Scan batching): 'single' = one call for the whole
+// shortlist; 'grouped' = ~4 candidates per call; 'per_candidate' = one each. Smaller
+// batches trade cost/latency for rigor: no cross-candidate bleed, no truncation risk.
+async function recommend(context, onProgress = () => {}) {
+  const s = settings.getSync();
+  const prefs = s.preferences;
   const calib = await calibrationSummary().catch(() => null);
-  const { data, usage, model } = await llm.chatJSON([
-    { role: "system", content: systemPrompt(prefs) + (calib ? `\n\n${calib}` : "") },
-    { role: "user", content: userPrompt(context) },
-  ], { task: "scan" });
+  const sys = systemPrompt(prefs) + (calib ? `\n\n${calib}` : "");
+  const marketC = compactMarket(context.market);
+  const candsC = context.candidates.map(compactCandidate);
+  const mode = s.ai.scan_batching || "single";
+  const size = mode === "per_candidate" ? 1 : mode === "grouped" ? 4 : Math.max(1, candsC.length);
+  const groups = [];
+  for (let i = 0; i < candsC.length; i += size) groups.push(candsC.slice(i, i + size));
+
   const candidateMap = {};
   for (const c of context.candidates) candidateMap[c.symbol.toUpperCase()] = c;
-  const recs = (Array.isArray(data.recommendations) ? data.recommendations : [])
-    .map((r) => validateRec(r, candidateMap, prefs))
-    .filter(Boolean)
-    .slice(0, prefs.risk.max_recommendations_per_scan);
-  return { recs, market_outlook: String(data.market_outlook || "").slice(0, 1500), usage, model };
+  const all = [], outlooks = [];
+  let usage = null, model = null;
+  for (const [gi, g] of groups.entries()) {
+    if (groups.length > 1) onProgress(`AI ${gi + 1}/${groups.length}: ${g.map((c) => c.symbol).join(", ")}`);
+    const r = await llm.chatJSON([
+      { role: "system", content: sys },
+      { role: "user", content: userPrompt(marketC, g) },
+    ], { task: "scan" });
+    model = r.model;
+    if (r.usage && r.usage.total_tokens != null) usage = { total_tokens: (usage ? usage.total_tokens : 0) + r.usage.total_tokens };
+    const recs = (Array.isArray(r.data.recommendations) ? r.data.recommendations : [])
+      .map((x) => validateRec(x, candidateMap, prefs))
+      .filter(Boolean);
+    if (groups.length > 1) onProgress(`  → ${recs.length ? recs.map((x) => `${x.side} ${x.symbol}`).join(", ") : "no ideas"}`);
+    all.push(...recs);
+    if (r.data.market_outlook) outlooks.push(String(r.data.market_outlook));
+  }
+  // Best ideas win the per-scan cap when groups produced more than the limit.
+  all.sort((a, b) => b.confidence - a.confidence);
+  const recs = all.slice(0, prefs.risk.max_recommendations_per_scan);
+  const market_outlook = (outlooks.sort((a, b) => b.length - a.length)[0] || "").slice(0, 1500);
+  return { recs, market_outlook, usage, model };
 }
 
 // Re-validate an OPEN/TRACKING recommendation against CURRENT data: is the idea still

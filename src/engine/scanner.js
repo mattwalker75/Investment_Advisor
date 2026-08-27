@@ -191,7 +191,7 @@ async function runScan(trigger = "manual") {
       },
       candidates: candidates.filter(Boolean),
     };
-    const { recs, market_outlook, model } = await recommender.recommend(context);
+    const { recs, market_outlook, model } = await recommender.recommend(context, say);
     say(`model ${model} returned ${recs.length} validated recommendation(s)`);
 
     // 6. Persist
