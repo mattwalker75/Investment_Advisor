@@ -142,10 +142,7 @@ async function loadDashboard() {
     $("recs-badge").textContent = active.length;
     $("dash-recs").innerHTML = recs.slice(0, 6).map(recRowSmall).join("") || '<div class="hint">No recommendations yet — run a scan.</div>';
   } catch (_) {}
-  try {
-    const evs = await api("/api/events?limit=12");
-    $("dash-events").innerHTML = evs.map((e) => `<div class="ev"><span class="t">${ago(e.at)}</span>${esc(e.message)}</div>`).join("") || '<div class="hint">Nothing yet.</div>';
-  } catch (_) {}
+  await refreshEvents();   // activity feed + desktop alerts share ONE events fetch
 }
 function recRowSmall(r) {
   return `<div class="ev"><span class="t">${ago(r.created_at)}</span>
@@ -1257,20 +1254,26 @@ function applyView() {
   }
 }
 
-/* ---------- browser notifications: poll events, surface new alerts ---------- */
+/* ---------- events: ONE poll loop feeds the activity feed AND desktop alerts ----------
+   (previously two independent intervals each fetched /api/events; consolidated so the
+   dashboard activity also stays live between visits instead of only refreshing on load) */
 const ALERT_TYPES = new Set(["stop_hit", "target_hit", "entry_hit", "stop_suggest", "health"]);
 let lastEventId = Number(localStorage.getItem("advisor_last_event") || 0);
-async function pollAlerts() {
-  if (!appSettings || !appSettings.notifications || !appSettings.notifications.browser) return;
-  if (!window.Notification || Notification.permission !== "granted") return;
-  try {
-    const evs = await api("/api/events?limit=20");
+async function refreshEvents() {
+  let evs;
+  try { evs = await api("/api/events?limit=20"); } catch (_) { return; }
+  // Dashboard activity feed — render whenever the dashboard is on screen.
+  if ($("panel-dashboard").classList.contains("active") && !document.hidden)
+    $("dash-events").innerHTML = evs.slice(0, 12).map((e) => `<div class="ev"><span class="t">${ago(e.at)}</span>${esc(e.message)}</div>`).join("") || '<div class="hint">Nothing yet.</div>';
+  // Desktop notifications for new alert-worthy events (while enabled + permitted).
+  if (appSettings && appSettings.notifications && appSettings.notifications.browser &&
+      window.Notification && Notification.permission === "granted") {
     const fresh = evs.filter((e) => e.id > lastEventId && ALERT_TYPES.has(e.type));
     if (lastEventId > 0) {
       for (const e of fresh.slice(0, 5)) new Notification("Investment Advisor" + (e.symbol ? " · " + e.symbol : ""), { body: e.message, tag: "adv-" + e.id });
     }
     if (evs.length) { lastEventId = Math.max(lastEventId, ...evs.map((e) => e.id)); localStorage.setItem("advisor_last_event", String(lastEventId)); }
-  } catch (_) {}
+  }
 }
 
 /* ---------- boot ---------- */
@@ -1287,7 +1290,7 @@ async function pollAlerts() {
   setInterval(loadMarketStrip, 5 * 60 * 1000);   // keep the strip fresh
   if (appSettings && appSettings.notifications && appSettings.notifications.browser &&
       window.Notification && Notification.permission === "default") Notification.requestPermission();
-  pollAlerts(); setInterval(pollAlerts, 45 * 1000);   // desktop alerts while the page is open
+  setInterval(refreshEvents, 45 * 1000);   // activity feed + desktop alerts, one loop
   // Live "price now" on the Recommendations tab: refresh every 60s while it's visible.
   setInterval(() => { if ($("panel-recs").classList.contains("active") && !document.hidden) loadRecs(); }, 60 * 1000);
 })();
