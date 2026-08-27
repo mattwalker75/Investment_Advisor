@@ -18,6 +18,9 @@ const tracker = require("./src/engine/tracker");
 const scheduler = require("./src/scheduler");
 
 const app = express();
+// Host/Origin guard FIRST: blocks cross-site requests (CSRF) and DNS-rebinding reads
+// from malicious web pages before anything else runs. See src/security.js.
+app.use(require("./src/security").localGuard);
 app.use(express.json({ limit: "2mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 // The charting library, served straight from node_modules (no CDN, works offline).
@@ -107,8 +110,24 @@ app.get("/api/db/config", (_req, res) => {
 app.put("/api/db/config", (req, res) => {
   try {
     const incoming = req.body || {};
+    // Shape validation: only known fields, correct types — a malformed write here would
+    // brick the next boot (this file is read before anything else).
+    if (incoming.dialect !== undefined && !["sqlite", "mysql"].includes(incoming.dialect))
+      return res.status(400).json({ error: "dialect must be 'sqlite' or 'mysql'" });
+    if (incoming.sqlite !== undefined && (typeof incoming.sqlite !== "object" || incoming.sqlite === null || (incoming.sqlite.file !== undefined && typeof incoming.sqlite.file !== "string")))
+      return res.status(400).json({ error: "sqlite must be an object like { file: 'data/advisor.db' }" });
+    if (incoming.mysql !== undefined) {
+      const m = incoming.mysql;
+      if (typeof m !== "object" || m === null) return res.status(400).json({ error: "mysql must be an object" });
+      for (const f of ["host", "user", "password", "database"]) if (m[f] !== undefined && typeof m[f] !== "string")
+        return res.status(400).json({ error: `mysql.${f} must be a string` });
+      if (m.port !== undefined && !(Number.isInteger(m.port) && m.port > 0 && m.port < 65536))
+        return res.status(400).json({ error: "mysql.port must be a valid port number" });
+    }
     const raw = JSON.parse(fs.readFileSync(db.CONFIG_FILE, "utf8"));
-    if (incoming.mysql && incoming.mysql.password === "•••") incoming.mysql.password = raw.db.mysql.password;
+    if (!raw.db || typeof raw.db !== "object") raw.db = {};
+    if (incoming.mysql && incoming.mysql.password === "•••")
+      incoming.mysql.password = (raw.db.mysql && raw.db.mysql.password) || "";
     raw.db = { ...raw.db, ...incoming };
     fs.writeFileSync(db.CONFIG_FILE, JSON.stringify(raw, null, 2));
     res.json({ ok: true, note: "Saved. Run ./ADVISOR.sh --init-db to create the schema, then --restart to switch." });
@@ -260,8 +279,13 @@ app.get("/api/export/recommendations.csv", async (_req, res) => {
 // ---------- Advisor chat (tool-calling conversation over all the tool's data) ----------
 app.post("/api/advisor-chat", async (req, res) => {
   try {
+    // The client re-sends its full localStorage history each turn — bound it server-side
+    // so a huge history can't balloon model cost/latency: keep the newest 40 turns, clip
+    // each to 8k chars (24k for the live user turn, which may be a long paste).
     const msgs = (Array.isArray(req.body && req.body.messages) ? req.body.messages : [])
-      .filter((m) => m && ["user", "assistant"].includes(m.role) && typeof m.content === "string");
+      .filter((m) => m && ["user", "assistant"].includes(m.role) && typeof m.content === "string")
+      .slice(-40)
+      .map((m, i, arr) => ({ role: m.role, content: m.content.slice(0, i === arr.length - 1 ? 24000 : 8000) }));
     if (!msgs.length || msgs[msgs.length - 1].role !== "user")
       return res.status(400).json({ error: "messages must end with a user turn" });
     const advisorChat = require("./src/ai/chat");

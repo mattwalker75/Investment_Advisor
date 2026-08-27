@@ -20,6 +20,10 @@ async function sendWebhook(title, message) {
   const cfg = settings.getSync().notifications || {};
   const url = (cfg.webhook_url || "").trim();
   if (!url) return false;
+  // SSRF guard: only http(s), never loopback/link-local/metadata destinations (private
+  // LAN hosts like a self-hosted ntfy stay allowed). Throws with the reason — the
+  // /api/notify/test endpoint surfaces it; background notifies swallow it below.
+  await require("./security").assertWebhookUrlAllowed(url);
   try {
     let init;
     if (/discord\.com\/api\/webhooks/.test(url)) {
