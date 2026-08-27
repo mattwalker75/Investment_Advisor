@@ -145,12 +145,8 @@ function getSync() { return cache || JSON.parse(JSON.stringify(DEFAULTS)); }
 async function setBlock(key, value) {
   if (!(key in DEFAULTS)) throw new Error("unknown settings block: " + key);
   const merged = deepMerge(DEFAULTS[key], value || {});
-  await db.run(
-    db.dialect === "mysql"
-      ? "INSERT INTO settings (`key`, value, updated_at) VALUES (?,?,?) ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=VALUES(updated_at)"
-      : "INSERT INTO settings (`key`, value, updated_at) VALUES (?,?,?) ON CONFLICT(`key`) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-    [key, JSON.stringify(merged), Date.now()]
-  );
+  await db.run(db.upsertSql("settings", ["key", "value", "updated_at"], "key"),
+    [key, JSON.stringify(merged), Date.now()]);
   await load();
   return cache[key];
 }

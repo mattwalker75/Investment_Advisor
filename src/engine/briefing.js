@@ -11,7 +11,7 @@ const news = require("../providers/news");
 const sentiment = require("../providers/sentiment");
 const { logEvent } = require("../events");
 
-const J = (s, fb) => { try { return JSON.parse(s); } catch (_) { return fb; } };
+const { J, yahooSym } = require("../util");
 
 async function gather() {
   const [quotes, senti, heads] = await Promise.all([
@@ -22,8 +22,7 @@ async function gather() {
   const trades = await db.all("SELECT * FROM trades WHERE status='open'");
   const positions = [];
   for (const t of trades) {
-    const sym = t.asset_type === "crypto" && !t.symbol.includes("-") ? `${t.symbol}-USD` : t.symbol;
-    const q = t.asset_type === "option" ? null : await yahoo.quote(sym).catch(() => null);
+    const q = t.asset_type === "option" ? null : await yahoo.quote(yahooSym(t)).catch(() => null);
     const od = J(t.option_details, null);
     positions.push({
       symbol: t.symbol, side: t.side, asset_type: t.asset_type,

@@ -13,12 +13,7 @@ async function cached(key, ttlMs, fetchFn, { allowStale = true } = {}) {
   try {
     const fresh = await fetchFn();
     const val = JSON.stringify(fresh);
-    await db.run(
-      db.dialect === "mysql"
-        ? "INSERT INTO cache (`key`, value, fetched_at) VALUES (?,?,?) ON DUPLICATE KEY UPDATE value=VALUES(value), fetched_at=VALUES(fetched_at)"
-        : "INSERT INTO cache (`key`, value, fetched_at) VALUES (?,?,?) ON CONFLICT(`key`) DO UPDATE SET value=excluded.value, fetched_at=excluded.fetched_at",
-      [key, val, Date.now()]
-    );
+    await db.run(db.upsertSql("cache", ["key", "value", "fetched_at"], "key"), [key, val, Date.now()]);
     return fresh;
   } catch (e) {
     // Stale beats nothing for background analysis — but callers that must never show

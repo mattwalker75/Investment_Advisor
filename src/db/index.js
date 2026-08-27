@@ -99,6 +99,18 @@ async function run(sql, params = []) {
   return { lastID: r.insertId || 0, changes: r.affectedRows || 0 };
 }
 
+// Dialect-correct INSERT ... upsert statement: inserts `cols`, and on a `keyCol`
+// conflict updates every non-key column. Callers bind values in `cols` order. Keeps the
+// MySQL-vs-SQLite conflict-clause fork in ONE place.
+function upsertSql(table, cols, keyCol) {
+  const q = (c) => `\`${c}\``;
+  const insert = `INSERT INTO ${table} (${cols.map(q).join(", ")}) VALUES (${cols.map(() => "?").join(",")})`;
+  const updates = cols.filter((c) => c !== keyCol);
+  if (dialect === "mysql")
+    return `${insert} ON DUPLICATE KEY UPDATE ${updates.map((c) => `${q(c)}=VALUES(${q(c)})`).join(", ")}`;
+  return `${insert} ON CONFLICT(${q(keyCol)}) DO UPDATE SET ${updates.map((c) => `${q(c)}=excluded.${q(c)}`).join(", ")}`;
+}
+
 // Drop every app table (used by --reset-db). Order respects foreign keys.
 async function dropAll() {
   const tables = ["trades", "recommendations", "scan_runs", "events", "cache", "settings", "watchlist"];
@@ -114,7 +126,7 @@ async function close() {
 }
 
 module.exports = {
-  init, all, get, run, dropAll, close, loadConfig,
+  init, all, get, run, upsertSql, dropAll, close, loadConfig,
   get dialect() { return dialect; },
   CONFIG_FILE,
 };

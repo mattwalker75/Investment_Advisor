@@ -5,6 +5,7 @@
 // hallucinated price can never reach the database unchecked.
 const llm = require("../ai/llm");
 const settings = require("../settings");
+const { J, yahooSym } = require("../util");
 
 const SCHEMA_EXAMPLE = `{
   "market_outlook": "1-3 sentence read of current conditions.",
@@ -178,7 +179,7 @@ async function duplicateOf(rec) {
   const db = require("../db");
   const rows = await db.all("SELECT id, side, entry_low, entry_high, options_play, taken FROM recommendations WHERE symbol=? AND status IN ('open','tracking')", [rec.symbol]);
   for (const ex of rows) {
-    const exPlay = (() => { try { return JSON.parse(ex.options_play); } catch (_) { return null; } })();
+    const exPlay = J(ex.options_play, null);
     if (rec.options_play) {   // options exception: multiple strategies per ticker are fine
       if (exPlay && exPlay.strategy === rec.options_play.strategy &&
           String(exPlay.expiry) === String(rec.options_play.expiry) &&
@@ -226,7 +227,7 @@ async function revalidate(recId) {
   if (!r) throw new Error("recommendation not found");
   if (!["open", "tracking"].includes(r.status)) throw new Error("only open/tracking recommendations can be re-validated");
 
-  const ySym = r.asset_type === "crypto" && !r.symbol.includes("-") ? `${r.symbol}-USD` : r.symbol;
+  const ySym = yahooSym(r);
   const [q, candles, heads] = await Promise.all([
     yahoo.quote(ySym).catch(() => null),
     yahoo.history(ySym, 365),

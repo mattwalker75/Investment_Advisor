@@ -23,7 +23,7 @@ app.use(express.static(path.join(__dirname, "public")));
 // The charting library, served straight from node_modules (no CDN, works offline).
 app.use("/vendor/lightweight-charts", express.static(path.join(__dirname, "node_modules", "lightweight-charts", "dist")));
 
-const J = (s, fb) => { try { return JSON.parse(s); } catch (_) { return fb; } };
+const { J, yahooSym, ladderPnl } = require("./src/util");
 const rowRec = (r) => {
   const inp = J(r.inputs, null);
   return {
@@ -368,16 +368,10 @@ app.post("/api/recommendations/:id/complete", async (req, res) => {
     const outcome = J(r.outcome, {}) || {};
     outcome.result = "completed_by_user"; outcome.exit_at = Date.now();
     if (r.status === "tracking" && outcome.entry_price != null) {
-      const ysym = r.asset_type === "crypto" && !r.symbol.includes("-") ? r.symbol + "-USD" : r.symbol;
-      const q = await yahoo.quote(ysym).catch(() => null);
+      const q = await yahoo.quote(yahooSym(r)).catch(() => null);
       const price = (q && q.price) ?? outcome.last_price ?? outcome.entry_price;
-      const targets = J(r.targets, []);
-      const hit = outcome.targets_hit || [];
-      const dir = r.side === "sell" ? -1 : 1;
-      let pnl = 0, used = 0;
-      for (const t of targets) if (hit.includes(t.price)) { pnl += (t.sell_pct / 100) * (((t.price - outcome.entry_price) / outcome.entry_price) * 100 * dir); used += t.sell_pct; }
-      if (used < 100) pnl += ((100 - used) / 100) * (((price - outcome.entry_price) / outcome.entry_price) * 100 * dir);
-      outcome.pnl_pct = +pnl.toFixed(2); outcome.exit_price = price;
+      outcome.pnl_pct = ladderPnl(outcome.entry_price, outcome.targets_hit || [], J(r.targets, []), price, r.side);
+      outcome.exit_price = price;
     }
     await db.run("UPDATE recommendations SET status='closed', outcome=? WHERE id=?", [JSON.stringify(outcome), r.id]);
     await db.run("INSERT INTO events (at, type, ref_type, ref_id, symbol, message) VALUES (?,?,?,?,?,?)",
@@ -392,10 +386,7 @@ app.post("/api/recommendations/:id/complete", async (req, res) => {
 app.post("/api/recommendations/refresh", async (_req, res) => {
   try {
     const act = await db.all("SELECT DISTINCT symbol, asset_type FROM recommendations WHERE status IN ('open','tracking')");
-    for (const r of act) {
-      const ysym = r.asset_type === "crypto" && !r.symbol.includes("-") ? r.symbol + "-USD" : r.symbol;
-      await db.run("DELETE FROM cache WHERE `key`=?", ["yq:" + ysym]);
-    }
+    for (const r of act) await db.run("DELETE FROM cache WHERE `key`=?", ["yq:" + yahooSym(r)]);
     await tracker.trackRecommendations();
     res.json({ ok: true, refreshed: act.length });
   } catch (e) { res.status(500).json({ error: e.message }); }

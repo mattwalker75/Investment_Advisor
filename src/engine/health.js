@@ -13,9 +13,8 @@ const news = require("../providers/news");
 const indicators = require("../indicators");
 const { logEvent } = require("../events");
 
-const J = (s, fb) => { try { return JSON.parse(s); } catch (_) { return fb; } };
+const { J, yahooSym } = require("../util");
 const now = () => Date.now();
-function yahooSym(t) { return t.asset_type === "crypto" && !t.symbol.includes("-") ? `${t.symbol}-USD` : t.symbol; }
 
 async function positionFacts(t, heads) {
   const q = await yahoo.quote(yahooSym(t)).catch(() => null);

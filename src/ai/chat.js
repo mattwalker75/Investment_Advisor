@@ -16,7 +16,7 @@ const indicators = require("../indicators");
 const scanner = require("../engine/scanner");
 const { resolveAsset } = require("../resolve");
 
-const J = (s, fb) => { try { return JSON.parse(s); } catch (_) { return fb; } };
+const { J, yahooSym } = require("../util");
 const T = (name, description, params = {}, required = []) => ({
   type: "function",
   function: { name, description, parameters: { type: "object", properties: params, required } },
@@ -118,9 +118,9 @@ async function execTool(name, args = {}) {
       const out = rows.map((t) => ({ ...t, targets: J(t.targets, []), exits: (J(t.exits, []) || []).filter((e) => !e.alert) }));
       const open = out.filter((t) => t.status === "open");
       if (open.length) {
-        const quotes = await yahoo.quotes([...new Set(open.map((t) => t.asset_type === "crypto" && !t.symbol.includes("-") ? `${t.symbol}-USD` : t.symbol))]).catch(() => ({}));
+        const quotes = await yahoo.quotes([...new Set(open.map(yahooSym))]).catch(() => ({}));
         for (const t of open) {
-          const q = quotes[t.asset_type === "crypto" && !t.symbol.includes("-") ? `${t.symbol}-USD` : t.symbol];
+          const q = quotes[yahooSym(t)];
           if (q && q.price != null) {
             t.last_price = q.price;
             const dir = t.side === "sell" ? -1 : 1;

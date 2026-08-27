@@ -16,27 +16,7 @@ const indicators = require("../indicators");
 
 const now = () => Date.now();
 const { logEvent } = require("../events");
-const J = (s, fb) => { try { return JSON.parse(s); } catch (_) { return fb; } };
-
-// Yahoo ticker for a rec/trade (crypto display symbols map to SYMBOL-USD).
-function yahooSym(row) {
-  return row.asset_type === "crypto" && !row.symbol.includes("-") ? `${row.symbol}-USD` : row.symbol;
-}
-
-// Weighted shadow P&L for a finished ladder: hit targets earn their rung, the remainder
-// exits at `residualPrice` (the stop, or the last price on expiry-while-tracking).
-function ladderPnl(entry, targetsHit, targets, residualPrice, side) {
-  let pnl = 0, pctUsed = 0;
-  for (const t of targets) {
-    if (targetsHit.includes(t.price)) { pnl += (t.sell_pct / 100) * pctChange(entry, t.price, side); pctUsed += t.sell_pct; }
-  }
-  if (pctUsed < 100 && residualPrice != null) pnl += ((100 - pctUsed) / 100) * pctChange(entry, residualPrice, side);
-  return +pnl.toFixed(2);
-}
-function pctChange(entry, exit, side) {
-  const raw = ((exit - entry) / entry) * 100;
-  return side === "sell" ? -raw : raw;
-}
+const { J, yahooSym, ladderPnl } = require("../util");
 
 // ---- Gap backfill: nothing may be missed while the app was OFF. ----
 // Live tracking spot-checks current prices, so a multi-day shutdown would blind us to a
@@ -51,10 +31,7 @@ async function getLastPass() {
   return row ? Number(row.value) : 0;
 }
 async function saveLastPass(ts) {
-  await db.run(
-    db.dialect === "mysql"
-      ? "INSERT INTO cache (`key`, value, fetched_at) VALUES (?,?,?) ON DUPLICATE KEY UPDATE value=VALUES(value), fetched_at=VALUES(fetched_at)"
-      : "INSERT INTO cache (`key`, value, fetched_at) VALUES (?,?,?) ON CONFLICT(`key`) DO UPDATE SET value=excluded.value, fetched_at=excluded.fetched_at",
+  await db.run(db.upsertSql("cache", ["key", "value", "fetched_at"], "key"),
     [LAST_PASS_KEY, String(ts), ts]).catch(() => {});
 }
 // Bar time -> [startMs, endMs] (daily bars are date strings; intraday are epoch seconds).
