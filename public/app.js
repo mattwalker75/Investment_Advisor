@@ -582,16 +582,30 @@ async function loadPerformance() {
 $("bt-run").addEventListener("click", async () => {
   const btn = $("bt-run"); btn.disabled = true; $("bt-note").textContent = "replaying the past year… (~30-90s)";
   try {
-    const r = await api("/api/backtest", { method: "POST", body: JSON.stringify({ min_signals: Number($("bt-minsig").value) || 2 }) });
+    const r = await api("/api/backtest", { method: "POST", body: JSON.stringify({
+      min_signals: Number($("bt-minsig").value) || 2,
+      exit_model: $("bt-exit").value,
+      slippage_pct: Number($("bt-slip").value),
+    }) });
     $("bt-note").textContent = "";
+    const O = r.overall || {};
+    const wf = r.walk_forward;
+    const wfRow = (label, m) => `<tr><td>${label}</td><td class="mono">${m.trades}</td>
+      <td class="mono">${m.win_rate ?? "—"}%</td><td class="mono ${cls(m.expectancy_pct)}">${fmtPct(m.expectancy_pct)}</td>
+      <td class="mono">${m.profit_factor ?? "—"}</td><td class="mono down">−${m.max_drawdown_pct ?? "—"}%</td></tr>`;
     $("bt-results").innerHTML = `
       <div class="tiles" style="margin-top:8px">
         <div class="tile"><div class="v">${r.total_trades}</div><div class="l">sim trades</div></div>
-        <div class="tile"><div class="v ${r.overall_win_rate >= 50 ? "up" : "down"}">${r.overall_win_rate ?? "—"}%</div><div class="l">win rate</div></div>
-        <div class="tile"><div class="v ${cls(r.avg_pnl_pct)}">${fmtPct(r.avg_pnl_pct)}</div><div class="l">avg trade</div></div>
+        <div class="tile"><div class="v ${O.win_rate >= 50 ? "up" : "down"}">${O.win_rate ?? "—"}%</div><div class="l">win rate</div></div>
+        <div class="tile"><div class="v ${cls(O.expectancy_pct)}">${fmtPct(O.expectancy_pct)}</div><div class="l">expectancy / trade</div></div>
+        <div class="tile"><div class="v">${O.profit_factor ?? "—"}</div><div class="l">profit factor</div></div>
+        <div class="tile"><div class="v down">−${O.max_drawdown_pct ?? "—"}%</div><div class="l">max drawdown</div></div>
         <div class="tile"><div class="v">${r.symbols_with_trades}/${r.symbols_tested}</div><div class="l">symbols traded</div></div>
       </div>
-      <div class="hint">Rules: enter next open when ≥${r.config.min_signals} of your buy signals fire (trend-filtered); stop ${r.config.stop}; target ${r.config.rr}×risk; max ${r.config.max_hold_bars} bars. Mechanical — tests your thresholds, not the AI.</div>
+      ${wf ? `<table class="grid" style="margin-top:8px"><thead><tr><th>Window</th><th>Trades</th><th>Win rate</th><th>Expectancy</th><th>PF</th><th>Max DD</th></tr></thead>
+        <tbody>${wfRow("In-sample (older)", wf.in_sample)}${wfRow(`Out-of-sample (since ${wf.cutoff_date})`, wf.out_of_sample)}</tbody></table>
+        <div class="hint">${esc(wf.note)}</div>` : ""}
+      <div class="hint">Rules: enter next open when ≥${r.config.min_signals} of your buy signals fire (trend-filtered); stop ${r.config.stop}; exit model <b>${r.config.exit_model}</b> (R:R ${r.config.rr}); max ${r.config.max_hold_bars} bars; slippage ${r.config.slippage_pct}%/fill${r.config.fee_pct_per_side ? `, fees ${r.config.fee_pct_per_side}%/side` : ""}. Gap-aware fills. Mechanical — tests your thresholds, not the AI.</div>
       <table class="grid" style="margin-top:8px"><thead><tr><th>Symbol</th><th>Trades</th><th>Win rate</th><th>Avg</th><th>Total</th></tr></thead>
       <tbody>${r.by_symbol.filter((x) => x.trades > 0).slice(0, 15).map((x) => `<tr>
         <td class="mono"><b>${esc(x.symbol)}</b></td><td class="mono">${x.trades}</td>

@@ -189,7 +189,10 @@ app.post("/api/briefing", async (_req, res) => {
 app.post("/api/backtest", async (req, res) => {
   try {
     const b = req.body || {};
-    res.json(await require("./src/engine/backtest").run(Array.isArray(b.symbols) && b.symbols.length ? b.symbols : null, Number(b.min_signals) || 2));
+    res.json(await require("./src/engine/backtest").run(
+      Array.isArray(b.symbols) && b.symbols.length ? b.symbols : null,
+      { min_signals: Number(b.min_signals) || 2, slippage_pct: b.slippage_pct, fee_pct: b.fee_pct,
+        exit_model: b.exit_model, oos_split_pct: b.oos_split_pct }));
   } catch (e) { res.status(502).json({ error: e.message }); }
 });
 
