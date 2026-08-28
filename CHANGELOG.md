@@ -4,6 +4,28 @@ All notable changes to Investment Advisor are tracked here.
 
 ## [Unreleased]
 
+### Added (batch 8)
+- 2026-08-28: **Fundamentals layer.** Every shortlisted stock candidate now carries a
+  compact valuation/quality block (market cap, beta, P/E / P/S / P/B TTM, margins, ROE,
+  debt-to-equity, dividend yield) from FMP (24h-cached, tier-graceful, nulls dropped);
+  the recommender is instructed to let fundamentals TEMPER the technical thesis — this
+  stays a swing-trade tool, not a value screener. `get_fundamentals` chat tool.
+- 2026-08-28: **Trade journal + AI coaching.** A journal per trade (open or closed —
+  📓 buttons, `POST /api/trades/:id/journal`, optional note on every exit, migrated
+  `journal` column). The weekly review reads YOUR OWN WORDS and coaches from them —
+  quoting notes, calling out patterns like exiting winners early — never inventing
+  notes you didn't write. The advisor offers to journal reflections from chat
+  (`update_trade.journal_note`, works on closed trades too).
+- 2026-08-28: **Correlation on the risk panel.** Pairwise daily-return correlation
+  (~6 months) and the sobering number: **effective positions** — how many independent
+  bets the portfolio actually behaves like (value-weighted 1/(w′ρw)). Tile turns red
+  when diversification collapses; per-pair warnings ("NVDA & AMD move together, ρ
+  0.85 — two tickers, closer to one bet").
+- 2026-08-28: **Order ticket helper.** 📋 Order on active rec cards copies a
+  broker-ready ticket sized from your risk settings — limit/zone, GTC stop, laddered
+  targets; options tickets carry strategy, legs, expiry, and net-premium levels.
+  95 tests, all green.
+
 ### Added (batch 7)
 - 2026-08-28: **AI live self-test.** One click in Settings → AI proves every AI pipeline
   against the configured model in miniature — endpoint round-trip, strict-JSON contract,

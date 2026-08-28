@@ -49,7 +49,8 @@ Local-only Express API (`127.0.0.1:8210`), no auth (single-user tool). All bodie
 | `POST /api/recommendations/:id/revalidate` | AI re-checks an open rec against current data → valid / adjust / withdraw. |
 | `GET /api/briefing` · `POST /api/briefing` | Latest daily AI briefing / generate one now. |
 | `POST /api/ai/selftest` | AI live self-test: proves each pipeline (JSON contract, tool calling, scan gauntlet, options pass, strategy compile) against the configured model in miniature; per-check pass/fail with failure text. |
-| `GET /api/portfolio/risk` | Risk panel: total $ lost if every stop hits, no-stop flags, biggest single risk, per-position rows. |
+| `GET /api/portfolio/risk` | Risk panel: total $ lost if every stop hits, no-stop flags, biggest single risk, per-position rows — plus `correlation` (pairwise ρ matrix, effective independent positions, move-together pairs). |
+| `POST /api/trades/:id/journal` | Append a timestamped journal note to a trade (open or closed) — the weekly review coaches from these. |
 | `GET /api/performance/attribution` | Outcomes split by source (scan/chat/options/your strategies), regime at entry, asset class; calibration drift; realized trade dollars. |
 | `GET/POST /api/review/weekly` | The weekly AI review (latest / generate): a candid retrospective with what-I'd-change suggestions. |
 | `GET /api/db/backups` · `POST /api/db/restore` | List backups (`?verify=1` integrity-checks each) / verified restore with an automatic pre-restore snapshot. |
