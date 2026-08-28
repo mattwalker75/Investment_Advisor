@@ -2,12 +2,13 @@
   "name": "investment-advisor",
   "version": "0.1.0",
   "private": true,
-  "description": "AI-powered stock & crypto trading advisor — market scanning, technical analysis, news/sentiment/whale tracking, and fully-logged recommendations. Local-first: SQLite or MySQL, any OpenAI-compatible model (OpenAI, Ollama, LiteLLM, LM Studio).",
+  "description": "AI-powered stock & crypto trading advisor \u2014 market scanning, technical analysis, news/sentiment/whale tracking, and fully-logged recommendations. Local-first: SQLite or MySQL, any OpenAI-compatible model (OpenAI, Ollama, LiteLLM, LM Studio).",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "init-db": "node scripts/init-db.js",
-    "reset-db": "node scripts/init-db.js --reset"
+    "reset-db": "node scripts/init-db.js --reset",
+    "test": "node --test"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
