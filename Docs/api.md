@@ -48,6 +48,9 @@ Local-only Express API (`127.0.0.1:8210`), no auth (single-user tool). All bodie
 | --- | --- |
 | `POST /api/recommendations/:id/revalidate` | AI re-checks an open rec against current data → valid / adjust / withdraw. |
 | `GET /api/briefing` · `POST /api/briefing` | Latest daily AI briefing / generate one now. |
+| `GET/PUT /api/alerts` | Notification rules ("tell me when…"): list with labels / replace the set (state and cooldowns preserved by id). Evaluated every ~5 min; per-rule delivery `instant` or `digest` (folded into the daily briefing). |
+| `GET /api/figures` · `POST /api/figures/follow` | Congressional trades: most-active politicians + latest filings (`?name=` filters to one person, option plays parsed from descriptions); follow/unfollow creates a `figure_filing` alert rule. |
+| `GET /api/insiders/:symbol` | SEC Form 4 insider filings for a stock (FMP; degrades to a note on free-tier limits). |
 | `POST /api/strategy/compile` | Plain-English strategy → validated spec (`{description}` → `{spec, notes}`); the spec is what actually runs — show it to the user. |
 | `POST /api/strategy/run` | Run a strategy spec through the direction-aware simulator (long/short, options model-priced, crypto); `?critique=1` adds the AI feedback. Full metrics + walk-forward. |
 | `GET/PUT/DELETE /api/strategies` | Saved, named, re-runnable strategies (PUT body `{spec}`; DELETE by `/:name`). |

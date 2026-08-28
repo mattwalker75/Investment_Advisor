@@ -45,6 +45,7 @@ src/
     ├── briefing.js            daily AI morning briefing
     ├── options.js             first-class options recs: premium pricing, gauntlet, settlement
     ├── strategylab.js         user-defined strategies: spec + simulator + AI compile/critique
+    ├── alerts.js              notification rules engine (incl. followed-figure filings, digest queue)
     ├── predict.js             projection cone (lognormal quantiles from EWMA realized vol)
     └── backtest.js            threshold backtester (gap-aware fills, ladder+trail model, walk-forward)
 public/                        dark terminal UI (vanilla JS + lightweight-charts)

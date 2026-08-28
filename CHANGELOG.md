@@ -4,6 +4,27 @@ All notable changes to Investment Advisor are tracked here.
 
 ## [Unreleased]
 
+### Added (batch 6)
+- 2026-08-28: **Notable-figure tracking.** A deep congressional feed (Senate + House,
+  multiple pages, deduped) with per-person views ("Pelosi" works), a most-active list,
+  option plays parsed out of the free-text descriptions, and FOLLOW alerts — following a
+  figure creates an alert rule that fires when they disclose new trades. Plus SEC Form 4
+  company-insider lookups per stock (graceful note if the FMP free tier declines the
+  endpoint). Dashboard "🏛 Notable figures" card, `/api/figures*` + `/api/insiders/:symbol`,
+  and `get_politician_trades` / `get_insider_trades` chat tools. Honest limits stated
+  everywhere: disclosures lag 30–45 days by law, amounts are ranges, crypto is
+  essentially absent from congressional filings.
+- 2026-08-28: **Notification rules engine + digest & quiet hours.** Programmable "tell
+  me when…" rules evaluated every ~5 minutes with per-subject cooldowns: price
+  above/below any symbol, daily move > X% (symbol/watchlist/positions), a rec entering
+  its entry zone, earnings within N days on a position, macro events, followed-figure
+  filings, portfolio drawdown, data-source degradation. Editor in Settings →
+  Notifications; `manage_alerts` chat tool ("ping me if BTC breaks 70k" just works).
+  Per-rule delivery: instant, or **digest** — queued quietly and folded into the next
+  daily briefing. **Quiet hours** pause webhook delivery in a local-time window
+  (midnight-wrap supported) — crossed stops always break through. 6 new unit tests
+  (77 total).
+
 ### Added (batch 5)
 - 2026-08-28: **Strategy Lab.** Describe YOUR strategy in plain English; the AI compiles
   it to a strict, whitelisted spec (always shown back — nothing hidden), a direction-

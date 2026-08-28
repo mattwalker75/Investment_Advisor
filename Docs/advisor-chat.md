@@ -33,6 +33,9 @@ which tools it consulted. Conversation persists in the browser (🗑 clears it).
 | `suggest_options_play` | Designs ONE options play within your allowed strategies, validated against the live chain (real strikes, premium from bid/ask mids, breakeven, max loss, IV); `save:true` tracks it as a premium-based shadow recommendation. |
 | `run_strategy` | Tests YOUR strategy: plain English → compiled spec (always shown back) → full simulation (long/short, options model-priced, crypto) → metrics + the advisor's own critique. `save_as` keeps it. |
 | `get_prediction` | Projection cone at a horizon (1h→1y): the statistically likely price range from realized volatility, bands widening with time. The advisor adds its directional lean WITH confidence — never as certainty. |
+| `get_politician_trades` | Congressional disclosures — per person ("Pelosi") or the latest feed + most-active list. Disclosures lag 30–45 days; options show in descriptions; crypto essentially absent. |
+| `get_insider_trades` | SEC Form 4 insider filings for a stock with a buy/sell summary (degrades to a note if the FMP tier lacks it). |
+| `manage_alerts` | Your notification rules — "ping me if BTC breaks 70k" creates a real rule, evaluated every ~5 minutes; list/remove too. |
 | `manage_memory` | Durable notes that persist across conversations (see below). |
 
 ## Slash commands

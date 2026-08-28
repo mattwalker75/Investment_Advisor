@@ -100,7 +100,17 @@ analysis, scanning, and tracking always run regardless of what's visible.
 - `browser` — desktop notifications while the page is open.
 - `webhook_url` — ONE URL, format auto-detected: `ntfy.sh/<topic>` (plain POST),
   Discord webhook (`{content}`), Slack webhook (`{text}`). Masked once saved.
-- `notify_on` — gates per category: `stops_targets`, `stop_suggestions`, `health`, `scans`, `briefing`.
+- `notify_on` — gates per category: `stops_targets`, `stop_suggestions`, `health`, `scans`, `briefing`, `custom_alerts` (the rules engine).
+- `quiet_hours` — `{enabled, start_hour, end_hour}` (local time; the window may wrap
+  midnight). Webhook delivery pauses inside it — **except crossed stops**, which always
+  break through. Events still land in the Activity feed.
+- **Alert rules** (Settings → Notifications, or via chat's `manage_alerts`): programmable
+  "tell me when…" triggers evaluated every ~5 minutes — price levels on any symbol,
+  daily moves > X% (a symbol / your watchlist / your positions), a rec entering its
+  entry zone, earnings within N days on a position, high-impact macro events, a followed
+  politician filing a trade, portfolio drawdown, data-source degradation. Each rule has
+  a cooldown and a delivery mode: `instant` (feed + browser + webhook) or `digest`
+  (queued quietly and folded into the next daily briefing).
 
 #### Phone push in 3 minutes (ntfy) — alerts with the browser CLOSED
 
