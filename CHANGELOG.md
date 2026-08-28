@@ -4,6 +4,35 @@ All notable changes to Investment Advisor are tracked here.
 
 ## [Unreleased]
 
+### Added (batch 4)
+- 2026-08-28: **Unit-test suite + `UNIT_TEST.sh`.** 59 network-free tests on Node's
+  built-in runner (zero new dependencies): the validateRec money-safety gauntlet, the
+  full options gauntlet, ladder P&L, indicator math + memo, the backtest simulator
+  (both exit models, slippage/fee accounting, walk-forward, the FIX-8 regression), the
+  shadow-tracker state machine end-to-end on a scratch DB (including option premium
+  tracking and expiry settlement), equity curves, CSV parse/write, resolveAsset,
+  packResult, and the security guards. Run by hand: `./UNIT_TEST.sh [name-filter]`, or
+  `npm test`.
+- 2026-08-28: **First-class OPTIONS recommendations.** With options enabled, the scan
+  runs a dedicated options pass producing standalone premium-denominated ideas (debit
+  plays = buy the premium; credit plays = sell it, targets decay), validated in
+  `src/engine/options.js` against the LIVE chain: allowed strategies only, strikes must
+  exist, premium from bid/ask mids, per-contract economics (breakeven, max loss/gain),
+  sane-default re-anchoring, ladder normalization, confidence gate, reward:risk gate
+  for debit plays. Cards label all levels as premium, size in contracts, and auto-route
+  "I took this" to the option flow.
+- 2026-08-28: **Premium-based shadow tracking + expiry settlement.** Option recs price
+  off the live net premium of their legs each tracking pass (no candle backfill — no
+  historical premium data exists) and run through the SAME state machine as stocks; at
+  expiry a tracking idea settles at intrinsic value (`closed`/`expired_settled`) and
+  counts in performance + confidence calibration. Never-entered ideas expire.
+- 2026-08-28: **Options in chat + IV context.** New `suggest_options_play` tool (24
+  tools total): one chain-validated play on demand with an optional
+  bullish/bearish/neutral_income view; `save:true` persists it (duplicate-guarded).
+  The scan prompt now carries each chain's ATM IV with prefer-debit-when-modest /
+  sell-premium-when-rich guidance. `revalidate` declines option recs honestly (they
+  are premium-tracked and settle at expiry).
+
 ### Fixed (re-analysis round)
 - 2026-08-28: Independent fresh-eyes review + author pass over the three shipped
   batches; 9 issues fixed: chat `list_trades` computed absurd P&L for option positions

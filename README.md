@@ -51,6 +51,7 @@ Then in the UI: **Settings → AI model** (pick provider + model, Test connectio
 ```
 ./ADVISOR.sh --setup | --start | --stop | --restart | --status | --logs
              --init-db | --reset-db
+./UNIT_TEST.sh          # run the unit-test suite (network-free; optional name filter)
 ```
 
 ## Documentation

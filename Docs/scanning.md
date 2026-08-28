@@ -58,6 +58,30 @@ The same P&L rule grades every finished recommendation everywhere (tracker, offl
 backfill, manual complete): hit targets earn their rung's percentage, the remaining
 position exits at the residual price (stop / live price / last price).
 
+## The options pass
+
+With options enabled (Settings → Options trading), the scan runs a second, dedicated AI
+pass over the chain-bearing stock candidates and produces **first-class options
+recommendations** — standalone ideas, not attachments to stock recs. Everything is
+denominated in **premium** (net, per share): a debit play (long call/put, debit spread)
+is `side: buy` on the premium; a credit play (covered call, CSP) is `side: sell` — you
+want the premium to decay, so targets sit below entry and the stop above (buy back if
+the short premium roughly doubles).
+
+Their own gauntlet (in `src/engine/options.js`): strategy must be in your allowed set,
+strikes must exist in the live chain, premium priced from real bid/ask mids, entry zone
+re-anchored to the live mid when the model's numbers are off, premium stop clamped,
+ladder normalized to 100%, confidence gate, and the reward:risk gate for debit plays
+(credit plays are income strategies — the ratio is reported, not gated). Cards show the
+full per-contract economics: breakeven, max loss/gain, IV, and the ATM IV read the AI
+used to choose debit vs credit.
+
+**Tracking:** option recs are shadow-tracked on their **live net premium** each pass
+(there is no historical premium data, so no offline candle backfill), and at expiry a
+tracking idea **settles at intrinsic value** — counted in the performance stats and
+confidence calibration alongside stopped/target_hit. In chat, `suggest_options_play`
+designs a single validated play on demand (optionally saved).
+
 ## Anatomy of a recommendation
 
 | Field | Meaning |
