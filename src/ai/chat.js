@@ -128,9 +128,10 @@ const TOOL_DEFS = [
       symbol: { type: "string" }, id: { type: "number" }, note: { type: "string" },
       alert_above: { type: "number" }, alert_below: { type: "number" },
       asset_type: { type: "string", enum: ["stock", "crypto"] } }, ["action"]),
-  T("update_trade", "Update the PLAN on an OPEN trade: stop_loss and/or the targets ladder. ADVISORY — the user still changes real orders at their broker. ALWAYS state the new levels and get the user's confirmation BEFORE calling. Clears any pending stop suggestion.",
+  T("update_trade", "Update the PLAN on an OPEN trade (stop_loss and/or targets ladder — ADVISORY; ALWAYS confirm the exact new levels with the user BEFORE calling; clears any pending stop suggestion), and/or append a JOURNAL note in the user's words (journal_note — works on open AND closed trades; the weekly review coaches from these). When the user reflects on a trade ('I sold too early', 'took this on the earnings dip'), offer to journal it.",
     { trade_id: { type: "number" }, stop_loss: { type: "number" },
-      targets: { type: "array", items: { type: "object", properties: { price: { type: "number" }, sell_pct: { type: "number" } }, required: ["price", "sell_pct"] } } },
+      targets: { type: "array", items: { type: "object", properties: { price: { type: "number" }, sell_pct: { type: "number" } }, required: ["price", "sell_pct"] } },
+      journal_note: { type: "string", description: "the user's reflection, in their words (lightly cleaned)" } },
     ["trade_id"]),
   T("get_economic_calendar", "Upcoming high-impact US macro events (FOMC, CPI, jobs report, GDP…) over the next N days (default 7) — binary-event risk beyond per-stock earnings dates. Requires the user's free FMP key; returns an explanatory note if unset.",
     { days: { type: "number", description: "1-30, default 7" } }),
@@ -378,13 +379,25 @@ async function execTool(name, args = {}) {
     }
     case "update_trade": {
       const t = await db.get("SELECT * FROM trades WHERE id=?", [args.trade_id]);
-      if (!t || t.status !== "open") return { error: "open trade not found (id " + args.trade_id + ")" };
-      const stop = args.stop_loss != null ? Number(args.stop_loss) : t.stop_loss;
-      const targets = Array.isArray(args.targets) ? JSON.stringify(args.targets) : t.targets;
-      await db.run("UPDATE trades SET stop_loss=?, targets=?, suggested_stop=NULL WHERE id=?", [stop, targets, t.id]);
-      if (args.stop_loss != null && args.stop_loss !== t.stop_loss)
-        await logEvent("stop_moved", "trade", t.id, t.symbol, `Stop moved (via chat): ${t.symbol} ${t.stop_loss ?? "—"} → ${stop}`);
-      return { ok: true, symbol: t.symbol, stop_loss: stop, targets: J(targets, []), note: "Plan updated here — remind the user to mirror it at their broker." };
+      if (!t) return { error: "trade not found (id " + args.trade_id + ")" };
+      const out = { ok: true, symbol: t.symbol };
+      if (args.journal_note && String(args.journal_note).trim()) {
+        const journal = (J(t.journal, []) || []);
+        journal.push({ at: Date.now(), note: String(args.journal_note).trim().slice(0, 1000) });
+        await db.run("UPDATE trades SET journal=? WHERE id=?", [JSON.stringify(journal.slice(-50)), t.id]);
+        out.journaled = true;
+      }
+      if (args.stop_loss != null || Array.isArray(args.targets)) {
+        if (t.status !== "open") return { ...out, error: "plan changes need an OPEN trade — only the journal note was saved" };
+        const stop = args.stop_loss != null ? Number(args.stop_loss) : t.stop_loss;
+        const targets = Array.isArray(args.targets) ? JSON.stringify(args.targets) : t.targets;
+        await db.run("UPDATE trades SET stop_loss=?, targets=?, suggested_stop=NULL WHERE id=?", [stop, targets, t.id]);
+        if (args.stop_loss != null && args.stop_loss !== t.stop_loss)
+          await logEvent("stop_moved", "trade", t.id, t.symbol, `Stop moved (via chat): ${t.symbol} ${t.stop_loss ?? "—"} → ${stop}`);
+        out.stop_loss = stop; out.targets = J(targets, []);
+        out.note = "Plan updated here — remind the user to mirror it at their broker.";
+      }
+      return out;
     }
     case "suggest_options_play": {
       if (!s.preferences.options.enabled) return { error: "options trading is disabled — the user can enable it in Settings → Options trading" };

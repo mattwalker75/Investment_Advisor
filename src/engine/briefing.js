@@ -82,7 +82,15 @@ async function gatherWeekly() {
   const finishedThisWeek = parsed.filter((r) =>
     (["stopped", "target_hit"].includes(r.status) || (r.status === "closed" && r.o.result === "expired_settled"))
     && r.o.pnl_pct != null && Number(r.o.exit_at || 0) > week);
-  const closedTrades = await db.all("SELECT symbol, pnl, pnl_pct, closed_at FROM trades WHERE status='closed' AND closed_at > ?", [week]);
+  const closedTrades = await db.all("SELECT symbol, pnl, pnl_pct, closed_at, exits, journal FROM trades WHERE status='closed' AND closed_at > ?", [week]);
+  // The user's own words: journal entries + exit notes from this week's activity, plus
+  // fresh journal notes on still-open positions.
+  const openJournals = await db.all("SELECT symbol, journal FROM trades WHERE status='open' AND journal IS NOT NULL");
+  const journalNotes = [];
+  for (const t of [...closedTrades, ...openJournals]) {
+    for (const e of (J(t.journal, []) || [])) if (e.at > week) journalNotes.push({ symbol: t.symbol, note: e.note });
+    for (const e of (J(t.exits, []) || [])) if (!e.alert && e.note && e.at > week) journalNotes.push({ symbol: t.symbol, note: `(on exit @ ${e.price}) ${e.note}` });
+  }
   const eventCounts = await db.all("SELECT type, COUNT(*) AS n FROM events WHERE at > ? GROUP BY type", [week]);
   const notable = await db.all(`SELECT message FROM events WHERE at > ? AND type IN ('strategy_signal','alert_rule','health') ORDER BY id DESC LIMIT 12`, [week]);
   const calibration = await require("./recommender").calibrationSummary().catch(() => null);
@@ -95,6 +103,7 @@ async function gatherWeekly() {
       still_active: parsed.filter((r) => ["open", "tracking"].includes(r.status)).length,
     },
     your_closed_trades: closedTrades.map((t) => ({ symbol: t.symbol, pnl: t.pnl, pnl_pct: t.pnl_pct })),
+    your_journal_notes: journalNotes.slice(0, 20),
     event_counts: Object.fromEntries(eventCounts.map((e) => [e.type, e.n])),
     notable_events: notable.map((e) => e.message),
     calibration_line: calibration,
@@ -108,7 +117,7 @@ async function runWeekly(trigger = "manual") {
     { role: "system", content: `You write the user's WEEKLY TRADING REVIEW for their personal investment advisor tool —
 a candid retrospective, not a pep talk. Markdown, ~300 words max:
 1. **The week** — recommendations made/finished with the real win/loss numbers; call out the best and worst call by name.
-2. **Your trading** — closed trades and their P&L; note anything the user did differently from the system's plan if visible.
+2. **Your trading** — closed trades and their P&L. your_journal_notes are the USER'S OWN WORDS about their trades: quote them where relevant and coach from them — patterns like exiting winners early, moving stops down, or revenge-trading after a loss deserve a direct, kind callout. Never invent notes they didn't write.
 3. **System health** — the confidence-calibration read, strategy signals and alerts that fired, equity vs the what-if curve.
 4. **What I'd change** — 1-2 CONCRETE, candid suggestions grounded in this week's data (a setting, a habit, a strategy tweak). If the sample is tiny, say so instead of inventing lessons.
 Numbers over adjectives. No greetings, no disclaimers.` },

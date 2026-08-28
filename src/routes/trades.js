@@ -12,6 +12,7 @@ const router = express.Router();
 const rowTrade = (t) => ({
   ...t, targets: J(t.targets, []), exits: (J(t.exits, []) || []).filter((e) => !e.alert),
   suggested_stop: J(t.suggested_stop, null), health: J(t.health, null), option_details: J(t.option_details, null),
+  journal: J(t.journal, []) || [],
 });
 
 router.get("/trades", async (req, res) => {
@@ -189,15 +190,32 @@ router.patch("/trades/:id", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Journal: append a timestamped note to a trade — open OR closed ("why I took it",
+// "why I bailed early"). The weekly AI review reads these and coaches from them.
+router.post("/trades/:id/journal", async (req, res) => {
+  try {
+    const t = await db.get("SELECT id, journal FROM trades WHERE id=?", [req.params.id]);
+    if (!t) return res.status(404).json({ error: "trade not found" });
+    const note = String((req.body && req.body.note) || "").trim().slice(0, 1000);
+    if (!note) return res.status(400).json({ error: "note required" });
+    const journal = (J(t.journal, []) || []);
+    journal.push({ at: Date.now(), note });
+    await db.run("UPDATE trades SET journal=? WHERE id=?", [JSON.stringify(journal.slice(-50)), t.id]);
+    res.json({ ok: true, entries: journal.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Record an exit (partial or full). Auto-closes when all quantity is exited.
 router.post("/trades/:id/exit", async (req, res) => {
   try {
     const t = await db.get("SELECT * FROM trades WHERE id=?", [req.params.id]);
     if (!t || t.status !== "open") return res.status(404).json({ error: "open trade not found" });
-    const { price, qty, reason } = req.body || {};
+    const { price, qty, reason, note } = req.body || {};
     if (!price || !qty) return res.status(400).json({ error: "price and qty are required" });
     const exits = (J(t.exits, []) || []);
-    exits.push({ at: Date.now(), price: Number(price), qty: Number(qty), reason: reason || "manual" });
+    const exit = { at: Date.now(), price: Number(price), qty: Number(qty), reason: reason || "manual" };
+    if (note && String(note).trim()) exit.note = String(note).trim().slice(0, 500);   // journal-worthy context
+    exits.push(exit);
     const realExits = exits.filter((e) => !e.alert);
     const soldQty = realExits.reduce((s, e) => s + e.qty, 0);
     const dir = t.side === "sell" ? -1 : 1;

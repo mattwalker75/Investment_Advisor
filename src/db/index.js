@@ -38,6 +38,7 @@ const MIGRATIONS = [
   ["trades", "suggested_stop", "TEXT", "LONGTEXT"],
   ["trades", "health", "TEXT", "LONGTEXT"],
   ["trades", "option_details", "TEXT", "LONGTEXT"],
+  ["trades", "journal", "TEXT", "LONGTEXT"],   // trade journal: [{at, note}] — read by the weekly review
 ];
 async function migrate() {
   for (const [table, col, sqliteType, mysqlType] of MIGRATIONS) {

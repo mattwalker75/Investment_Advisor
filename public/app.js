@@ -621,11 +621,12 @@ function exitModal(t, remaining) {
     <div class="frow"><label>Exit price</label><input id="m-price" type="number" step="any" value="${t.last_price || ""}"></div>
     <div class="frow"><label>Quantity</label><input id="m-qty" type="number" step="any" value="${remaining}"></div>
     <div class="frow"><label>Reason</label><select id="m-reason"><option>target</option><option>stop</option><option>manual</option></select></div>
+    <div class="frow"><label>Journal note</label><input id="m-exnote" placeholder="optional — why now? (the weekly review reads these)"></div>
     <div class="actions"><button class="ghost" onclick="document.getElementById('modal').hidden=true">Cancel</button>
     <button class="primary" id="m-go">Record exit</button></div>`);
   $("m-go").addEventListener("click", async () => {
     try {
-      await api(`/api/trades/${t.id}/exit`, { method: "POST", body: JSON.stringify({ price: Number($("m-price").value), qty: Number($("m-qty").value), reason: $("m-reason").value }) });
+      await api(`/api/trades/${t.id}/exit`, { method: "POST", body: JSON.stringify({ price: Number($("m-price").value), qty: Number($("m-qty").value), reason: $("m-reason").value, note: $("m-exnote").value }) });
       closeModal(); loadTrades(); loadDashboard();
     } catch (e) { alert(e.message); }
   });
@@ -662,11 +663,12 @@ async function loadTrades() {
         <td class="mono ${cls(t.unrealized_pnl)}">${t.unrealized_pnl != null ? `$${fmtP(t.unrealized_pnl, 2)} (${fmtPct(t.unrealized_pnl_pct)})` : "—"}</td>
         <td class="hint">${ago(t.entry_at)}</td>
         <td><button class="ghost small" data-tchart="${t.id}" title="Chart with your plan drawn">📈</button>
+            <button class="ghost small" data-journal="${t.id}" title="Trade journal — your notes; the weekly review coaches from them">📓${(t.journal || []).length || ""}</button>
             <button class="ghost small" data-exit="${t.id}">Exit…</button></td></tr>`;
     }).join("")}</tbody></table>` : '<div class="hint">No open positions. Take a recommendation or log a manual trade.</div>';
 
   $("trades-closed").innerHTML = closed.length ? `<table class="grid"><thead><tr>
-      <th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>P&L</th><th>Held</th><th>Closed</th>
+      <th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>P&L</th><th>Held</th><th>Closed</th><th></th>
     </tr></thead><tbody>${closed.map((t) => {
       const heldDays = t.closed_at ? Math.max(0, Math.round((t.closed_at - t.entry_at) / 86400000)) : null;
       const longTerm = heldDays != null && heldDays >= 365;
@@ -677,7 +679,8 @@ async function loadTrades() {
       <td class="mono">${fmtP(t.entry_price)}</td>
       <td class="mono ${cls(t.pnl)}">$${fmtP(t.pnl, 2)} (${fmtPct(t.pnl_pct)})</td>
       <td class="hint" title="holding period for tax purposes">${heldDays != null ? `${heldDays}d <span class="${longTerm ? "up" : ""}">${longTerm ? "long" : "short"}-term</span>` : "—"}</td>
-      <td class="hint">${t.closed_at ? ago(t.closed_at) : "—"}</td></tr>`;
+      <td class="hint">${t.closed_at ? ago(t.closed_at) : "—"}</td>
+      <td><button class="ghost small" data-journal="${t.id}" title="Trade journal — what happened, in your words">📓${(t.journal || []).length || ""}</button></td></tr>`;
     }).join("")}</tbody></table>`
     : '<div class="hint">No closed trades yet.</div>';
 
@@ -685,6 +688,29 @@ async function loadTrades() {
     const t = open.find((x) => x.id === Number(b.dataset.exit));
     const sold = (t.exits || []).reduce((s, e) => s + (e.qty || 0), 0);
     exitModal(t, t.qty - sold);
+  }));
+  // Trade journal: your words, read by the weekly review.
+  document.querySelectorAll("[data-journal]").forEach((b) => b.addEventListener("click", () => {
+    const t = trades.find((x) => x.id === Number(b.dataset.journal));
+    if (!t) return;
+    const entries = [
+      ...(t.journal || []).map((e) => ({ at: e.at, text: e.note })),
+      ...(t.exits || []).filter((e) => e.note).map((e) => ({ at: e.at, text: `(exit @ ${fmtP(e.price)}) ${e.note}` })),
+    ].sort((a, b2) => a.at - b2.at);
+    modal(`<h3>📓 Journal — ${esc(t.symbol)} <span class="hint">${t.status}</span></h3>
+      <div class="hint">Why you took it, why you exited, what you'd do differently — the weekly review reads these and coaches from them.</div>
+      <div style="max-height:200px;overflow-y:auto;margin:8px 0">${entries.length
+        ? entries.map((e) => `<div class="ev"><span class="t">${ago(e.at)}</span>${esc(e.text)}</div>`).join("")
+        : '<div class="hint">No entries yet.</div>'}</div>
+      <textarea id="m-jnote" style="width:100%;min-height:70px" placeholder="e.g. Took this on the earnings dip — thesis was overdone selling. / Sold early, got nervous at resistance."></textarea>
+      <div class="actions"><button class="ghost" onclick="document.getElementById('modal').hidden=true">Close</button>
+      <button class="primary" id="m-go">Add note</button></div>`);
+    $("m-go").addEventListener("click", async () => {
+      const note2 = $("m-jnote").value.trim();
+      if (!note2) return;
+      try { await api(`/api/trades/${t.id}/journal`, { method: "POST", body: JSON.stringify({ note: note2 }) }); closeModal(); loadTrades(); }
+      catch (e) { alert(e.message); }
+    });
   }));
   document.querySelectorAll("[data-tchart]").forEach((b) => b.addEventListener("click", () => {
     const t = open.find((x) => x.id === Number(b.dataset.tchart));
