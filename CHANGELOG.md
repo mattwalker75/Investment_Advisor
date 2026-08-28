@@ -14,6 +14,14 @@ All notable changes to Investment Advisor are tracked here.
   (`?account=`, `none` = untagged; portfolio-wide correlation is honestly omitted under
   a filter), the tax view split per account (IRA gains aren't taxable-account gains),
   attribution's realized dollars by account, and the trades CSV export.
+- 2026-08-28: **AI cost telemetry.** Every model call (scan, chat, briefing, health,
+  self-test…) is logged to an `ai_usage` table — task, model, and the endpoint-reported
+  token counts; streamed calls whose endpoint reports nothing get an honest
+  ~4-chars/token estimate, flagged as estimated. Settings → AI shows the 30-day
+  summary (calls + tokens by task) and optional $/Mtok input/output prices turn tokens
+  into an estimated cost — leave them at 0 for local models and the cost line stays
+  hidden. `GET /api/ai/usage`, 90-day retention, fire-and-forget (telemetry can never
+  break an AI call). 106 tests, all green.
 
 ### Added (batch 9)
 - 2026-08-28: **Research report generator.** 📑 Research on the Charts tab (and the

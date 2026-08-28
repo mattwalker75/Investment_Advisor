@@ -117,3 +117,18 @@ CREATE TABLE IF NOT EXISTS watchlist (
   alerts_fired TEXT                       -- JSON {above_at, below_at} de-dup markers
 );
 CREATE INDEX IF NOT EXISTS idx_watch_symbol ON watchlist(symbol);
+
+-- AI usage telemetry: one row per model call (scan, chat, briefing…). Streamed calls
+-- may carry ESTIMATED token counts (estimated=1) when the endpoint reports no usage.
+CREATE TABLE IF NOT EXISTS ai_usage (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  at                INTEGER NOT NULL,
+  task              TEXT NOT NULL,           -- 'scan' | 'light' | 'chat' | 'test' | …
+  model             TEXT,
+  prompt_tokens     INTEGER,
+  completion_tokens INTEGER,
+  total_tokens      INTEGER,
+  estimated         INTEGER DEFAULT 0,       -- 1 = counts estimated (endpoint sent no usage)
+  via_failover      INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_at ON ai_usage(at);

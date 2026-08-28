@@ -75,6 +75,15 @@ router.post("/ai/selftest", async (_req, res) => {
   catch (e) { res.status(502).json({ error: e.message }); }
 });
 
+// AI usage telemetry: 30-day summary (calls + tokens by task/model/day, est. cost when
+// per-Mtok prices are configured). ?days= narrows/widens the window (max 90 = retention).
+router.get("/ai/usage", async (req, res) => {
+  try {
+    const days = Math.max(1, Math.min(90, Number(req.query.days) || 30));
+    res.json(await require("../ai/usage").summary(days));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // DB connection config (ADVISOR_CONFIG.json — the one file-based setting). Password masked.
 router.get("/db/config", (_req, res) => {
   try {

@@ -41,7 +41,7 @@ async function timed(name, fn) {
 async function runSelfTest() {
   const s = settings.getSync();
   const prefs = s.preferences;
-  const opts = { timeout_ms: 90000, max_tokens: 1500 };
+  const opts = { timeout_ms: 90000, max_tokens: 1500, task: "selftest" };   // task tag = usage-telemetry label (no model override configured for it)
   const results = [];
 
   // 1. Endpoint round-trip — can we reach the model at all?

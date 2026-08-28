@@ -76,6 +76,7 @@ Local-only Express API (`127.0.0.1:8210`), no auth (single-user tool). All bodie
 | --- | --- |
 | `POST /api/advisor-chat[?stream=1]` | Tool-calling chat. Non-streamed → `{reply, trace}`; `?stream=1` → NDJSON events (`tools`/`token`/`reset`/`done`). |
 | `POST /api/ai/test` | Round-trip test of endpoint/model/key. |
+| `GET /api/ai/usage[?days=]` | AI cost telemetry: every model call is logged; 30-day summary of calls + tokens by task/model/day, with an estimated cost when $/Mtok prices are set (Settings → AI). Streamed calls whose endpoint reports no usage carry honest ~4-chars/token estimates, flagged as such. 90-day retention. |
 | `POST /api/ai/models` | List models from an OpenAI-compatible endpoint (chat-capable filtered). |
 
 ## Settings & system

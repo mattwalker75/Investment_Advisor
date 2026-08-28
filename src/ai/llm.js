@@ -90,6 +90,9 @@ async function chatOnce(messages, opts = {}) {
   }
   const d = await r.json();
   const m = (d.choices && d.choices[0] && d.choices[0].message) || {};
+  // Cost telemetry (fire-and-forget): every call lands in ai_usage with the
+  // endpoint-reported token counts (Settings → AI shows the 30-day summary).
+  require("./usage").record({ task: opts.task, model: body.model, usage: d.usage || null, via_failover: !!opts.no_failover });
   return { content: m.content || "", tool_calls: m.tool_calls || null, usage: d.usage || null, model: body.model };
 }
 
@@ -139,7 +142,7 @@ async function chatStreamOnce(messages, opts = {}, onToken = () => {}) {
   if (!r.ok || !r.body) throw new Error(`LLM ${r.status} (model ${body.model}): ${(await r.text()).slice(0, 300)}`);
   const reader = r.body.getReader();
   const decoder = new TextDecoder();
-  let buf = "", content = "";
+  let buf = "", content = "", usage = null;
   const toolCalls = [];
   for (;;) {
     const { done, value } = await reader.read();
@@ -152,6 +155,7 @@ async function chatStreamOnce(messages, opts = {}, onToken = () => {}) {
       const payload = line.slice(5).trim();
       if (payload === "[DONE]") continue;
       let json; try { json = JSON.parse(payload); } catch { continue; }
+      if (json.usage) usage = json.usage;    // some endpoints report usage in the final chunk
       const delta = json.choices && json.choices[0] && json.choices[0].delta;
       if (!delta) continue;
       if (delta.content) { content += delta.content; try { onToken(delta.content); } catch (_) {} }
@@ -167,6 +171,16 @@ async function chatStreamOnce(messages, opts = {}, onToken = () => {}) {
     }
   }
   const tc = toolCalls.filter(Boolean);
+  // Cost telemetry: endpoint-reported usage when the stream carried it; otherwise an
+  // honest ~4-chars/token ESTIMATE, flagged estimated=1 in the log.
+  const est = require("./usage");
+  est.record({
+    task: opts.task, model: body.model, estimated: !usage, via_failover: !!opts.no_failover,
+    usage: usage || {
+      prompt_tokens: est.estimateTokens(JSON.stringify(messages)),
+      completion_tokens: est.estimateTokens(content + tc.map((t) => t.function.arguments).join("")),
+    },
+  });
   return { content, tool_calls: tc.length ? tc : null };
 }
 
@@ -215,7 +229,7 @@ async function chatJSON(messages, opts = {}) {
 async function test(cfg) {
   const r = await chat(
     [{ role: "user", content: "Reply with exactly: OK" }],
-    { ...cfg, max_tokens: 500, timeout_ms: 60000 }
+    { ...cfg, max_tokens: 500, timeout_ms: 60000, task: "test" }
   );
   return { ok: true, model: r.model, reply: (r.content || "").trim().slice(0, 80) };
 }

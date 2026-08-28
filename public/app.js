@@ -1382,6 +1382,25 @@ document.addEventListener("click", (e) => { if (!e.target.closest(".sym-search")
 
 /* ---------- settings ---------- */
 let dbBadge = "…";
+
+// AI usage telemetry (Settings → AI): 30-day calls/tokens by task, honest about
+// estimates, with a cost line only when per-Mtok prices are set.
+const fmtTok = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n || 0);
+async function loadAiUsage() {
+  const el = $("ai-usage");
+  if (!el) return;
+  try {
+    const u = await api("/api/ai/usage");
+    const t = u.total;
+    if (!t.calls) { el.innerHTML = '<div class="hint" style="margin-top:6px">📊 No AI calls logged yet — usage appears here after the next scan, chat, or briefing.</div>'; return; }
+    const tasks = Object.entries(u.by_task).sort((a, b) => b[1].total_tokens - a[1].total_tokens);
+    el.innerHTML = `
+      <div class="hint" style="margin-top:8px"><b>📊 Last ${u.window_days} days:</b> ${t.calls} call(s) · ${fmtTok(t.total_tokens)} tokens (${fmtTok(t.prompt_tokens)} in / ${fmtTok(t.completion_tokens)} out)${u.est_cost_usd != null ? ` · <b>~$${u.est_cost_usd}</b>` : ""}${t.estimated_calls ? ` · ${t.estimated_calls} streamed call(s) estimated ~4 chars/token` : ""}${t.calls_without_usage ? ` · ${t.calls_without_usage} call(s) reported no usage` : ""}</div>
+      <table class="grid" style="margin-top:4px"><thead><tr><th>Task</th><th>Calls</th><th>Tokens</th><th>In</th><th>Out</th></tr></thead>
+      <tbody>${tasks.map(([k, b]) => `<tr><td>${esc(k)}</td><td class="mono">${b.calls}</td><td class="mono">${fmtTok(b.total_tokens)}</td><td class="mono">${fmtTok(b.prompt_tokens)}</td><td class="mono">${fmtTok(b.completion_tokens)}</td></tr>`).join("")}</tbody></table>
+      ${u.cost_note ? `<div class="hint" style="margin-top:4px">${esc(u.cost_note)}</div>` : ""}`;
+  } catch (e) { el.innerHTML = `<div class="hint" style="margin-top:6px">⚠ usage unavailable — ${esc(e.message)}</div>`; }
+}
 async function loadSettings() {
   const [s, dbc] = await Promise.all([api("/api/settings"), api("/api/db/config").catch(() => null)]);
   const root = $("settings-root");
@@ -1417,6 +1436,10 @@ async function loadSettings() {
     <div class="frow"><label>Failover URL</label><input type="text" id="ai-fo-url" value="${esc((s.ai.failover && s.ai.failover.base_url) || "")}" placeholder="empty = same endpoint"></div>
     <div class="frow"><label>Failover key</label><input type="password" id="ai-fo-key" value="${esc((s.ai.failover && s.ai.failover.api_key) || "")}" placeholder="empty = same key"></div>
     <div class="frow"><label>Failover model</label><input type="text" id="ai-fo-model" value="${esc((s.ai.failover && s.ai.failover.model) || "")}" placeholder="e.g. a cloud model as backup"></div>
+    <div class="hint" style="margin-top:10px"><b>Usage & cost</b>: every model call is logged (scans, chat, briefings…). Optional $/million-token prices turn tokens into an estimated cost — leave at 0 for local models (free).</div>
+    <div class="frow"><label>$/Mtok input</label><input type="number" class="short" id="ai-cost-in" step="0.01" min="0" value="${(s.ai.cost && s.ai.cost.per_mtok_input) || 0}">
+      <label style="width:auto">$/Mtok output</label><input type="number" class="short" id="ai-cost-out" step="0.01" min="0" value="${(s.ai.cost && s.ai.cost.per_mtok_output) || 0}"></div>
+    <div id="ai-usage"></div>
     <div class="save-row"><button class="primary" id="save-ai">Save</button><button class="ghost" id="test-ai">Test connection</button>
       <button class="ghost" id="selftest-ai" title="Prove every AI pipeline (JSON contract, tool calling, scan, options, strategy compile) against the saved model — run after any model change">🧪 Test AI features</button><span id="note-ai"></span></div>
     <div id="selftest-results"></div>
@@ -1616,6 +1639,7 @@ async function loadSettings() {
         task_models: { scan: $("ai-tier-scan").value.trim(), light: $("ai-tier-light").value.trim() },
         scan_batching: $("ai-batching").value,
         failover: { enabled: $("ai-fo-on").checked, base_url: $("ai-fo-url").value.trim(), api_key: $("ai-fo-key").value, model: $("ai-fo-model").value.trim() },
+        cost: { per_mtok_input: Number($("ai-cost-in").value) || 0, per_mtok_output: Number($("ai-cost-out").value) || 0 },
       }) });
       note("note-ai", "Saved ✓");
     } catch (e) { note("note-ai", e.message, false); }
@@ -1683,6 +1707,7 @@ async function loadSettings() {
     } catch (_) { $("db-backups").innerHTML = ""; }
   }
   loadDbBackups();
+  loadAiUsage();
   $("save-db").addEventListener("click", async () => {
     try {
       const body = { dialect: $("db-dialect").value };

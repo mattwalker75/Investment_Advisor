@@ -24,6 +24,9 @@ const DEFAULTS = {
     // Optional failover tried once when the primary endpoint hard-fails (network error,
     // 5xx, timeout). Empty base_url/api_key inherit the primary's values.
     failover: { enabled: false, base_url: "", api_key: "", model: "" },
+    // Optional $/million-token prices for the usage telemetry's cost estimate.
+    // Leave at 0 for local models (free) — the cost line simply stays hidden.
+    cost: { per_mtok_input: 0, per_mtok_output: 0 },
   },
 
   // --- What the user is willing to trade. The scanner NEVER strays outside this. ---

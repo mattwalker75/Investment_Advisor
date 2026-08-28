@@ -117,3 +117,18 @@ CREATE TABLE IF NOT EXISTS watchlist (
   alerts_fired LONGTEXT,
   INDEX idx_watch_symbol (symbol)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- AI usage telemetry: one row per model call (scan, chat, briefing…). Streamed calls
+-- may carry ESTIMATED token counts (estimated=1) when the endpoint reports no usage.
+CREATE TABLE IF NOT EXISTS ai_usage (
+  id                BIGINT PRIMARY KEY AUTO_INCREMENT,
+  at                BIGINT NOT NULL,
+  task              VARCHAR(32) NOT NULL,
+  model             VARCHAR(128),
+  prompt_tokens     INT,
+  completion_tokens INT,
+  total_tokens      INT,
+  estimated         TINYINT DEFAULT 0,
+  via_failover      TINYINT DEFAULT 0,
+  INDEX idx_ai_usage_at (at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
