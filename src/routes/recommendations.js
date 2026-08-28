@@ -88,10 +88,11 @@ router.post("/recommendations/:id/take", async (req, res) => {
         premium_levels: r.asset_type === "option" || undefined,
       };
     }
+    const account = String(b.account ?? "").trim().slice(0, 40) || null;
     const t = await db.run(
-      "INSERT INTO trades (rec_id, created_at, asset_type, symbol, side, qty, entry_price, entry_at, stop_loss, targets, option_details, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,'open')",
+      "INSERT INTO trades (rec_id, created_at, asset_type, symbol, side, qty, entry_price, entry_at, stop_loss, targets, option_details, status, account) VALUES (?,?,?,?,?,?,?,?,?,?,?,'open',?)",
       [r.id, Date.now(), assetType, r.symbol, r.side, Number(b.qty), Number(b.entry_price), Date.now(), r.stop_loss, r.targets,
-       optionDetails ? JSON.stringify(optionDetails) : null]
+       optionDetails ? JSON.stringify(optionDetails) : null, account]
     );
     await db.run("UPDATE recommendations SET taken=1 WHERE id=?", [r.id]);
     const desc = optionDetails ? `${b.qty} contract(s) ${r.symbol} ${optionDetails.strike}${optionDetails.type === "put" ? "P" : "C"} ${optionDetails.expiry} @ ${b.entry_price}` : `${b.qty} ${r.symbol} @ ${b.entry_price}`;

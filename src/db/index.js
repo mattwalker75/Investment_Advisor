@@ -39,6 +39,7 @@ const MIGRATIONS = [
   ["trades", "health", "TEXT", "LONGTEXT"],
   ["trades", "option_details", "TEXT", "LONGTEXT"],
   ["trades", "journal", "TEXT", "LONGTEXT"],   // trade journal: [{at, note}] — read by the weekly review
+  ["trades", "account", "TEXT", "VARCHAR(64)"], // account label (IRA, taxable…) — tax split / attribution / risk per account
 ];
 async function migrate() {
   for (const [table, col, sqliteType, mysqlType] of MIGRATIONS) {

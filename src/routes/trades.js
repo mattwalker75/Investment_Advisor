@@ -15,6 +15,13 @@ const rowTrade = (t) => ({
   journal: J(t.journal, []) || [],
 });
 
+// Account labels are free text ("IRA", "taxable", "Robinhood") — trimmed, capped,
+// empty → NULL (untagged). One helper so every write normalizes the same way.
+const accountLabel = (v) => {
+  const s = String(v ?? "").trim().slice(0, 40);
+  return s || null;
+};
+
 router.get("/trades", async (req, res) => {
   const status = req.query.status;
   const rows = status
@@ -95,10 +102,11 @@ router.post("/trades", async (req, res) => {
       od = { type: od.type === "put" ? "put" : "call", strike: Number(od.strike), expiry: String(od.expiry) };
     }
     const t = await db.run(
-      "INSERT INTO trades (rec_id, created_at, asset_type, symbol, side, qty, entry_price, entry_at, stop_loss, targets, option_details, status, notes) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,'open',?)",
+      "INSERT INTO trades (rec_id, created_at, asset_type, symbol, side, qty, entry_price, entry_at, stop_loss, targets, option_details, status, notes, account) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,'open',?,?)",
       [Date.now(), b.asset_type, String(b.symbol).toUpperCase(), b.side === "sell" ? "sell" : "buy",
        Number(b.qty), Number(b.entry_price), Date.now(), b.stop_loss ? Number(b.stop_loss) : null,
-       JSON.stringify(b.targets || []), od ? JSON.stringify(od) : null, b.notes || null]
+       JSON.stringify(b.targets || []), od ? JSON.stringify(od) : null, b.notes || null,
+       accountLabel(b.account)]
     );
     res.json({ ok: true, trade_id: t.lastID });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -116,7 +124,8 @@ const IMPORT_ALIASES = {
   asset_type: ["asset_type", "type", "class", "asset_class"],
   entry_date: ["entry_date", "date", "opened", "open_date", "purchase_date", "acquired", "trade_date"],
   stop_loss: ["stop_loss", "stop"],
-  notes: ["notes", "note", "description", "account"],
+  notes: ["notes", "note", "description"],
+  account: ["account", "account_name", "account_type", "portfolio", "brokerage"],
 };
 router.post("/trades/import", async (req, res) => {
   try {
@@ -152,9 +161,9 @@ router.post("/trades/import", async (req, res) => {
         const when = Date.parse(get("entry_date")) || Date.now();
         const stop = num(get("stop_loss"));
         await db.run(
-          "INSERT INTO trades (rec_id, created_at, asset_type, symbol, side, qty, entry_price, entry_at, stop_loss, targets, option_details, status, notes) VALUES (NULL,?,?,?,?,?,?,?,?,?,NULL,'open',?)",
+          "INSERT INTO trades (rec_id, created_at, asset_type, symbol, side, qty, entry_price, entry_at, stop_loss, targets, option_details, status, notes, account) VALUES (NULL,?,?,?,?,?,?,?,?,?,NULL,'open',?,?)",
           [Date.now(), a.asset_type === "index" ? "stock" : a.asset_type, a.display, side, qty, price, when,
-           isFinite(stop) && stop > 0 ? stop : null, JSON.stringify([]), get("notes") || "imported"]);
+           isFinite(stop) && stop > 0 ? stop : null, JSON.stringify([]), get("notes") || "imported", accountLabel(get("account"))]);
         openExisting.push({ symbol: a.display, qty, entry_price: price });   // in-file dupes too
         imported++;
       } catch (e) { errors.push(`row ${n + 2}: ${e.message}`); }
@@ -177,8 +186,13 @@ router.post("/trades/health-check", async (req, res) => {
 router.patch("/trades/:id", async (req, res) => {
   try {
     const t = await db.get("SELECT * FROM trades WHERE id=?", [req.params.id]);
-    if (!t || t.status !== "open") return res.status(404).json({ error: "open trade not found" });
+    if (!t) return res.status(404).json({ error: "trade not found" });
     const b = req.body || {};
+    // Account retags are allowed on closed trades too (the tax split cares); the PLAN
+    // (stop/targets) only changes while the trade is open.
+    if ("account" in b) await db.run("UPDATE trades SET account=? WHERE id=?", [accountLabel(b.account), t.id]);
+    if (b.stop_loss == null && !Array.isArray(b.targets)) return res.json({ ok: true, account: accountLabel(b.account) });
+    if (t.status !== "open") return res.status(404).json({ error: "open trade not found" });
     const stop = b.stop_loss != null ? Number(b.stop_loss) : t.stop_loss;
     const targets = Array.isArray(b.targets) ? JSON.stringify(b.targets) : t.targets;
     // Applying a suggestion clears it (it's been acted on).
@@ -245,8 +259,9 @@ router.get("/portfolio/concentration", async (_req, res) => {
 });
 
 // Portfolio risk panel: total $ at risk if every stop hits, no-stop flags, biggest risk.
-router.get("/portfolio/risk", async (_req, res) => {
-  try { res.json(await require("../engine/portfolio").riskPanel()); }
+// ?account= narrows to one account label ("none" = untagged trades).
+router.get("/portfolio/risk", async (req, res) => {
+  try { res.json(await require("../engine/portfolio").riskPanel({ account: req.query.account })); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -267,11 +282,12 @@ router.get("/export/trades.csv", async (_req, res) => {
       stop_loss: t.stop_loss, status: t.status, pnl: t.pnl, pnl_pct: t.pnl_pct,
       closed_date: t.closed_at ? new Date(Number(t.closed_at)).toISOString().slice(0, 10) : "",
       holding_days: held, tax_term: t.closed_at ? (held >= 365 ? "long" : "short") : "",
+      account: t.account || "",
       option: t.option_details || "", exits: (J(t.exits, []) || []).filter((e) => !e.alert).map((e) => `${e.qty}@${e.price}`).join("; "),
     };
   });
   res.setHeader("Content-Disposition", "attachment; filename=trades.csv");
-  res.type("text/csv").send(toCsv(out, ["id", "symbol", "asset_type", "side", "qty", "entry_price", "entry_date", "stop_loss", "status", "pnl", "pnl_pct", "closed_date", "holding_days", "tax_term", "option", "exits"]));
+  res.type("text/csv").send(toCsv(out, ["id", "symbol", "asset_type", "side", "qty", "entry_price", "entry_date", "stop_loss", "status", "pnl", "pnl_pct", "closed_date", "holding_days", "tax_term", "account", "option", "exits"]));
 });
 
 module.exports = router;

@@ -483,11 +483,12 @@ function takeTradeModal(r) {
     <div class="hint">Log the fill you actually got; the advisor then tracks it against the plan (stop ${fmtP(r.stop_loss)}, ${(r.targets || []).length} target(s)).${ps ? `<br>Suggested size for your risk settings: <b>${ps.qty}</b> (risking ~$${fmtP(ps.risk_amount, 0)} if stopped).` : ""}</div>
     <div class="frow"><label>Quantity</label><input id="m-qty" type="number" step="any" min="0" value="${ps ? ps.qty : ""}"></div>
     <div class="frow"><label>Entry price</label><input id="m-price" type="number" step="any" value="${r.current_price || ""}"></div>
+    ${acctRow()}
     <div class="actions"><button class="ghost" onclick="document.getElementById('modal').hidden=true">Cancel</button>
     <button class="primary" id="m-go">Open trade</button></div>`);
   $("m-go").addEventListener("click", async () => {
     try {
-      await api(`/api/recommendations/${r.id}/take`, { method: "POST", body: JSON.stringify({ qty: Number($("m-qty").value), entry_price: Number($("m-price").value) }) });
+      await api(`/api/recommendations/${r.id}/take`, { method: "POST", body: JSON.stringify({ qty: Number($("m-qty").value), entry_price: Number($("m-price").value), account: $("m-acct").value.trim() || undefined }) });
       closeModal(); loadRecs(); loadTrades();
     } catch (e) { alert(e.message); }
   });
@@ -502,11 +503,12 @@ function takeOptionModal(r) {
       ${p.max_loss_per_contract ? ` · max loss $${fmtP(p.max_loss_per_contract, 0)}/contract` : ""}</div>
     <div class="frow"><label>Contracts</label><input id="m-qty" type="number" step="1" min="1" value="1"></div>
     <div class="frow"><label>Premium paid<br><span class="hint">per share</span></label><input id="m-price" type="number" step="any" value="${p.est_premium || ""}"></div>
+    ${acctRow()}
     <div class="actions"><button class="ghost" onclick="document.getElementById('modal').hidden=true">Cancel</button>
     <button class="primary" id="m-go">Open option trade</button></div>`);
   $("m-go").addEventListener("click", async () => {
     try {
-      await api(`/api/recommendations/${r.id}/take`, { method: "POST", body: JSON.stringify({ instrument: "option", qty: Number($("m-qty").value), entry_price: Number($("m-price").value) }) });
+      await api(`/api/recommendations/${r.id}/take`, { method: "POST", body: JSON.stringify({ instrument: "option", qty: Number($("m-qty").value), entry_price: Number($("m-price").value), account: $("m-acct").value.trim() || undefined }) });
       closeModal(); loadRecs(); loadTrades();
     } catch (e) { alert(e.message); }
   });
@@ -578,6 +580,8 @@ $("health-check-btn").addEventListener("click", async () => {
   finally { btn.disabled = false; setTimeout(() => { noteEl.textContent = ""; }, 8000); }
 });
 
+$("acct-filter").addEventListener("change", () => { acctFilter = $("acct-filter").value; loadTrades(); });
+
 $("trade-add-btn").addEventListener("click", () => {
   modal(`<h3>Log a manual trade</h3>
     <div class="frow"><label>Symbol</label><input id="m-sym" placeholder="AAPL or BTC-USD" style="text-transform:uppercase"></div>
@@ -591,6 +595,7 @@ $("trade-add-btn").addEventListener("click", () => {
     <div class="frow"><label id="m-qty-label">Quantity</label><input id="m-qty" type="number" step="any"></div>
     <div class="frow"><label id="m-price-label">Entry price</label><input id="m-price" type="number" step="any"></div>
     <div class="frow"><label>Stop loss</label><input id="m-stop" type="number" step="any" placeholder="optional (underlying price for options)"></div>
+    ${acctRow()}
     <div class="actions"><button class="ghost" onclick="document.getElementById('modal').hidden=true">Cancel</button>
     <button class="primary" id="m-go">Log trade</button></div>`);
   $("m-type").addEventListener("change", () => {
@@ -605,6 +610,7 @@ $("trade-add-btn").addEventListener("click", () => {
         symbol: $("m-sym").value.trim().toUpperCase(), asset_type: $("m-type").value, side: $("m-side").value,
         qty: Number($("m-qty").value), entry_price: Number($("m-price").value),
         stop_loss: $("m-stop").value ? Number($("m-stop").value) : null,
+        account: $("m-acct").value.trim() || undefined,
       };
       if (body.asset_type === "option") body.option_details = { type: $("m-otype").value, strike: Number($("m-strike").value), expiry: $("m-expiry").value };
       await api("/api/trades", { method: "POST", body: JSON.stringify(body) });
@@ -659,15 +665,44 @@ function exitModal(t, remaining) {
   });
 }
 
+// Account labels (IRA, taxable, broker…) seen on trades — feeds datalists and the filter.
+let knownAccounts = [], acctFilter = "";
+const acctRow = (val = "") => `<div class="frow"><label>Account</label>
+  <input id="m-acct" list="acct-dl" value="${esc(val)}" placeholder="optional — IRA, taxable, broker…" maxlength="40">
+  <datalist id="acct-dl">${knownAccounts.map((a) => `<option value="${esc(a)}">`).join("")}</datalist></div>`;
+const acctChip = (t) => t.account ? ` <span class="chipstat" title="account">🏷 ${esc(t.account)}</span>` : "";
+function acctTagModal(t) {
+  modal(`<h3>🏷 Account — ${esc(t.symbol)} <span class="hint">${t.status}</span></h3>
+    <div class="hint">Label this trade with the account it lives in (IRA vs taxable matters for the tax split; the risk panel and attribution split by it too). Works on closed trades. Empty clears the tag.</div>
+    ${acctRow(t.account || "")}
+    <div class="actions"><button class="ghost" onclick="document.getElementById('modal').hidden=true">Cancel</button>
+    <button class="primary" id="m-go">Save</button></div>`);
+  $("m-go").addEventListener("click", async () => {
+    try { await api(`/api/trades/${t.id}`, { method: "PATCH", body: JSON.stringify({ account: $("m-acct").value.trim() }) }); closeModal(); loadTrades(); }
+    catch (e) { alert(e.message); }
+  });
+}
+
 async function loadTrades() {
   if (!$("trades-open").childElementCount) $("trades-open").innerHTML = loadingHtml;
   let trades;
   try { trades = await api("/api/trades"); }
   catch (e) { errState($("trades-open"), "Couldn't load trades — " + e.message, loadTrades); return; }
+  // Account filter: only shown once labels exist; "none" = untagged trades.
+  knownAccounts = [...new Set(trades.map((t) => t.account).filter(Boolean))].sort();
+  const af = $("acct-filter");
+  af.hidden = !knownAccounts.length;
+  if (knownAccounts.length) {
+    af.innerHTML = `<option value="">all accounts</option>` +
+      knownAccounts.map((a) => `<option value="${esc(a)}"${acctFilter === a ? " selected" : ""}>🏷 ${esc(a)}</option>`).join("") +
+      `<option value="none"${acctFilter === "none" ? " selected" : ""}>untagged</option>`;
+  } else acctFilter = "";
+  const allOpenCount = trades.filter((t) => t.status === "open").length;   // badge ignores the filter
+  if (acctFilter) trades = trades.filter((t) => (acctFilter === "none" ? !t.account : t.account === acctFilter));
   const open = trades.filter((t) => t.status === "open");
   const closed = trades.filter((t) => t.status === "closed");
-  $("trades-badge").hidden = !open.length;
-  $("trades-badge").textContent = open.length;
+  $("trades-badge").hidden = !allOpenCount;
+  $("trades-badge").textContent = allOpenCount;
 
   $("trades-open").innerHTML = open.length ? `<table class="grid"><thead><tr>
       <th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Last</th><th>Stop</th><th>Health</th><th>Unrealized</th><th>Opened</th><th></th>
@@ -679,7 +714,7 @@ async function loadTrades() {
       const h = t.health;
       const hIcon = h ? ({ hold: "🟢", tighten_stop: "🟠", take_partial: "🟠", sell_now: "🔴" }[h.action] || "⚪") : "";
       return `<tr>
-        <td class="mono"><b>${esc(t.symbol)}</b>${od ? ` <span class="hint">${fmtP(od.strike, 0)}${(od.type || "")[0] ? (od.type[0] || "").toUpperCase() : ""} ${esc(od.expiry || "")}</span>` : ""}${t.rec_id ? ' <span class="hint">· rec</span>' : ""}</td>
+        <td class="mono"><b>${esc(t.symbol)}</b>${od ? ` <span class="hint">${fmtP(od.strike, 0)}${(od.type || "")[0] ? (od.type[0] || "").toUpperCase() : ""} ${esc(od.expiry || "")}</span>` : ""}${t.rec_id ? ' <span class="hint">· rec</span>' : ""}${acctChip(t)}</td>
         <td><span class="side ${t.side}">${t.side.toUpperCase()}</span></td>
         <td class="mono">${remaining}${sold ? `<span class="hint">/${t.qty}</span>` : ""}</td>
         <td class="mono">${fmtP(t.entry_price)}</td>
@@ -691,6 +726,7 @@ async function loadTrades() {
         <td class="hint">${ago(t.entry_at)}</td>
         <td><button class="ghost small" data-tchart="${t.id}" title="Chart with your plan drawn">📈</button>
             <button class="ghost small" data-journal="${t.id}" title="Trade journal — your notes; the weekly review coaches from them">📓${(t.journal || []).length || ""}</button>
+            <button class="ghost small" data-acct="${t.id}" title="Account label (IRA, taxable…) — tax split / risk / attribution">🏷</button>
             <button class="ghost small" data-exit="${t.id}">Exit…</button></td></tr>`;
     }).join("")}</tbody></table>` : '<div class="hint">No open positions. Take a recommendation or log a manual trade.</div>';
 
@@ -700,17 +736,22 @@ async function loadTrades() {
       const heldDays = t.closed_at ? Math.max(0, Math.round((t.closed_at - t.entry_at) / 86400000)) : null;
       const longTerm = heldDays != null && heldDays >= 365;
       return `<tr>
-      <td class="mono"><b>${esc(t.symbol)}</b></td>
+      <td class="mono"><b>${esc(t.symbol)}</b>${acctChip(t)}</td>
       <td><span class="side ${t.side}">${t.side.toUpperCase()}</span></td>
       <td class="mono">${t.qty}</td>
       <td class="mono">${fmtP(t.entry_price)}</td>
       <td class="mono ${cls(t.pnl)}">$${fmtP(t.pnl, 2)} (${fmtPct(t.pnl_pct)})</td>
       <td class="hint" title="holding period for tax purposes">${heldDays != null ? `${heldDays}d <span class="${longTerm ? "up" : ""}">${longTerm ? "long" : "short"}-term</span>` : "—"}</td>
       <td class="hint">${t.closed_at ? ago(t.closed_at) : "—"}</td>
-      <td><button class="ghost small" data-journal="${t.id}" title="Trade journal — what happened, in your words">📓${(t.journal || []).length || ""}</button></td></tr>`;
+      <td><button class="ghost small" data-journal="${t.id}" title="Trade journal — what happened, in your words">📓${(t.journal || []).length || ""}</button>
+          <button class="ghost small" data-acct="${t.id}" title="Account label — retagging closed trades keeps the tax split honest">🏷</button></td></tr>`;
     }).join("")}</tbody></table>`
     : '<div class="hint">No closed trades yet.</div>';
 
+  document.querySelectorAll("[data-acct]").forEach((b) => b.addEventListener("click", () => {
+    const t = trades.find((x) => x.id === Number(b.dataset.acct));
+    if (t) acctTagModal(t);
+  }));
   document.querySelectorAll("[data-exit]").forEach((b) => b.addEventListener("click", () => {
     const t = open.find((x) => x.id === Number(b.dataset.exit));
     const sold = (t.exits || []).reduce((s, e) => s + (e.qty || 0), 0);
@@ -749,10 +790,12 @@ async function loadTrades() {
     $("concentration-banner").innerHTML = (c.warnings || []).length
       ? `<div class="warn-banner">${c.warnings.map((w) => esc(w)).join("<br>")}</div>` : "";
   }).catch(() => {});
-  // Risk panel: "how much can today cost me?"
-  api("/api/portfolio/risk").then((r) => {
-    if (!r.positions || !r.positions.length) { $("risk-panel").innerHTML = ""; return; }
+  // Risk panel: "how much can today cost me?" (follows the account filter; correlation
+  // is portfolio-wide, so the server omits it under a filter rather than mislabel it)
+  api("/api/portfolio/risk" + (acctFilter ? `?account=${encodeURIComponent(acctFilter)}` : "")).then((r) => {
+    if (!r.positions || !r.positions.length) { $("risk-panel").innerHTML = acctFilter ? `<div class="hint" style="margin:4px 0 8px">🏷 ${esc(acctFilter === "none" ? "untagged" : acctFilter)}: no open positions.</div>` : ""; return; }
     $("risk-panel").innerHTML = `
+      ${r.account_filter ? `<div class="hint" style="margin:4px 0 0">🏷 risk for <b>${esc(r.account_filter === "none" ? "untagged trades" : r.account_filter)}</b> only</div>` : ""}
       <div class="tiles" style="margin:4px 0 8px">
         <div class="tile"><div class="v down">$${fmtP(r.total_risk, 0)}</div><div class="l">at risk if all stops hit</div></div>
         <div class="tile"><div class="v ${r.risk_pct_of_account > 10 ? "down" : ""}">${r.risk_pct_of_account}%</div><div class="l">of $${fmtP(r.account_size, 0)} account</div></div>
@@ -828,7 +871,9 @@ async function loadPerformance() {
     <div class="tile"><div class="v ${cls(T.total_pnl)}">$${fmtP(T.total_pnl, 2)}</div><div class="l">total P&L</div></div>
     <div class="tile"><div class="v ${cls(T.avg_pnl_pct)}">${fmtPct(T.avg_pnl_pct)}</div><div class="l">avg per trade</div></div>
     ${T.by_term ? `<div class="tile"><div class="v ${cls(T.by_term.short.pnl)}">$${fmtP(T.by_term.short.pnl, 0)}</div><div class="l">short-term P&L (${T.by_term.short.count})</div></div>
-    <div class="tile"><div class="v ${cls(T.by_term.long.pnl)}">$${fmtP(T.by_term.long.pnl, 0)}</div><div class="l">long-term P&L (${T.by_term.long.count})</div></div>` : ""}`;
+    <div class="tile"><div class="v ${cls(T.by_term.long.pnl)}">$${fmtP(T.by_term.long.pnl, 0)}</div><div class="l">long-term P&L (${T.by_term.long.count})</div></div>` : ""}
+    ${T.by_account ? Object.entries(T.by_account).map(([a, v]) =>
+      `<div class="tile" title="short ${v.by_term.short.count} / long ${v.by_term.long.count} — tax terms only matter outside tax-advantaged accounts"><div class="v ${cls(v.pnl)}">$${fmtP(v.pnl, 0)}</div><div class="l">🏷 ${esc(a)} (${v.count}) · S $${fmtP(v.by_term.short.pnl, 0)} / L $${fmtP(v.by_term.long.pnl, 0)}</div></div>`).join("") : ""}`;
   loadEquityCurve();
   labRefreshSaved();
   loadAttribution();
@@ -853,6 +898,7 @@ async function loadAttribution() {
       ${tbl("By asset class", a.by_asset)}
       ${drift ? `<div class="hint" style="margin-top:8px"><b>Calibration drift:</b> early half ${drift.early.win_rate}% win @ avg conf ${drift.early.avg_confidence} → late half ${drift.late.win_rate}% win @ avg conf ${drift.late.avg_confidence}</div>` : ""}
       ${Object.keys(a.realized_trade_pnl_by_asset || {}).length ? `<div class="hint" style="margin-top:4px"><b>Realized trade P&L:</b> ${Object.entries(a.realized_trade_pnl_by_asset).map(([k, v]) => `${esc(k)} ${v >= 0 ? "+" : ""}$${fmtP(v, 0)}`).join(" · ")}</div>` : ""}
+      ${a.realized_trade_pnl_by_account ? `<div class="hint" style="margin-top:4px"><b>By account:</b> ${Object.entries(a.realized_trade_pnl_by_account).map(([k, v]) => `🏷 ${esc(k)} ${v >= 0 ? "+" : ""}$${fmtP(v, 0)}`).join(" · ")}</div>` : ""}
       <div class="hint" style="margin-top:4px">${esc(a.note)}</div>`;
   } catch (_) {}
 }

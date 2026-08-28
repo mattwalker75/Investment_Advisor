@@ -119,7 +119,8 @@ const TOOL_DEFS = [
   T("get_portfolio_concentration", "Sector-concentration check across the user's OPEN positions: position counts per sector plus correlated-risk warnings."),
   T("get_fundamentals", "Valuation/quality snapshot for a STOCK: market cap, beta, P/E, P/S, P/B (TTM), gross/net margins, ROE, debt-to-equity, dividend yield — from the user's FMP key (24h-cached; degrades to a note without the key or on tier limits). Use it to temper technical calls; crypto has no fundamentals.",
     { symbol: { type: "string" } }, ["symbol"]),
-  T("get_portfolio_risk", "The risk panel: total $ lost if EVERY stop hits (no-stop positions count their full value and are flagged; long options cap at premium), % of account, biggest single risk, and per-position risk rows. Use for 'how much am I risking?' / 'review my risk'."),
+  T("get_portfolio_risk", "The risk panel: total $ lost if EVERY stop hits (no-stop positions count their full value and are flagged; long options cap at premium), % of account, biggest single risk, and per-position risk rows. Use for 'how much am I risking?' / 'review my risk'. Optional account narrows to one account label ('none' = untagged); the response lists the labels that exist.",
+    { account: { type: "string", description: "account label to filter by, or 'none' for untagged trades" } }),
   T("research_report", "Generate a FULL RESEARCH NOTE on one symbol: runs every engine (technicals, fundamentals, news, insiders, congress activity, options posture, projection cone, market regime, and the system's own track record on the name) and writes a structured note — thesis, technical picture, valuation, catalysts & risks, smart money, honest projection band, a trade plan only if warranted, and confidence. SLOW (many data fetches + a long AI write); saved to the report library automatically. Use for 'write me a research note/report on X' — for a quick take, use get_analysis instead.",
     { symbol: { type: "string" },
       asset_type: { type: "string", enum: ["stock", "crypto"], description: "optional hint" } }, ["symbol"]),
@@ -131,10 +132,11 @@ const TOOL_DEFS = [
       symbol: { type: "string" }, id: { type: "number" }, note: { type: "string" },
       alert_above: { type: "number" }, alert_below: { type: "number" },
       asset_type: { type: "string", enum: ["stock", "crypto"] } }, ["action"]),
-  T("update_trade", "Update the PLAN on an OPEN trade (stop_loss and/or targets ladder — ADVISORY; ALWAYS confirm the exact new levels with the user BEFORE calling; clears any pending stop suggestion), and/or append a JOURNAL note in the user's words (journal_note — works on open AND closed trades; the weekly review coaches from these). When the user reflects on a trade ('I sold too early', 'took this on the earnings dip'), offer to journal it.",
+  T("update_trade", "Update the PLAN on an OPEN trade (stop_loss and/or targets ladder — ADVISORY; ALWAYS confirm the exact new levels with the user BEFORE calling; clears any pending stop suggestion), append a JOURNAL note in the user's words (journal_note — works on open AND closed trades; the weekly review coaches from these), and/or set the ACCOUNT label (account — 'IRA', 'taxable'…, empty string clears; works on closed trades too, feeds the tax split / attribution / per-account risk). When the user reflects on a trade ('I sold too early', 'took this on the earnings dip'), offer to journal it.",
     { trade_id: { type: "number" }, stop_loss: { type: "number" },
       targets: { type: "array", items: { type: "object", properties: { price: { type: "number" }, sell_pct: { type: "number" } }, required: ["price", "sell_pct"] } },
-      journal_note: { type: "string", description: "the user's reflection, in their words (lightly cleaned)" } },
+      journal_note: { type: "string", description: "the user's reflection, in their words (lightly cleaned)" },
+      account: { type: "string", description: "account label (IRA, taxable, broker name…); empty string clears the tag" } },
     ["trade_id"]),
   T("get_economic_calendar", "Upcoming high-impact US macro events (FOMC, CPI, jobs report, GDP…) over the next N days (default 7) — binary-event risk beyond per-stock earnings dates. Requires the user's free FMP key; returns an explanatory note if unset.",
     { days: { type: "number", description: "1-30, default 7" } }),
@@ -327,7 +329,7 @@ async function execTool(name, args = {}) {
     case "check_position_health": return await require("../engine/health").checkPositions(args.trade_id || null);
     case "revalidate_recommendation": return await require("../engine/recommender").revalidate(Number(args.id));
     case "get_portfolio_concentration": return await require("../engine/portfolio").concentration();
-    case "get_portfolio_risk": return await require("../engine/portfolio").riskPanel();
+    case "get_portfolio_risk": return await require("../engine/portfolio").riskPanel({ account: args.account });
     case "get_fundamentals": {
       const a = await resolveAsset(args.symbol, "stock");
       if (!a) return { error: "symbol required" };
@@ -394,8 +396,13 @@ async function execTool(name, args = {}) {
         await db.run("UPDATE trades SET journal=? WHERE id=?", [JSON.stringify(journal.slice(-50)), t.id]);
         out.journaled = true;
       }
+      if (args.account !== undefined) {   // retag allowed on closed trades too (tax split)
+        const label = String(args.account ?? "").trim().slice(0, 40) || null;
+        await db.run("UPDATE trades SET account=? WHERE id=?", [label, t.id]);
+        out.account = label || "(untagged)";
+      }
       if (args.stop_loss != null || Array.isArray(args.targets)) {
-        if (t.status !== "open") return { ...out, error: "plan changes need an OPEN trade — only the journal note was saved" };
+        if (t.status !== "open") return { ...out, error: "plan changes need an OPEN trade — only the journal/account changes were saved" };
         const stop = args.stop_loss != null ? Number(args.stop_loss) : t.stop_loss;
         const targets = Array.isArray(args.targets) ? JSON.stringify(args.targets) : t.targets;
         await db.run("UPDATE trades SET stop_loss=?, targets=?, suggested_stop=NULL WHERE id=?", [stop, targets, t.id]);

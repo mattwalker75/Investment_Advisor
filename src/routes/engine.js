@@ -179,10 +179,15 @@ router.get("/performance/attribution", async (_req, res) => {
       early: { ...grp(fin.slice(0, half)), avg_confidence: +(fin.slice(0, half).reduce((s, r) => s + (r.confidence || 0), 0) / half).toFixed(2) },
       late: { ...grp(fin.slice(half)), avg_confidence: +(fin.slice(half).reduce((s, r) => s + (r.confidence || 0), 0) / (fin.length - half)).toFixed(2) },
     } : null;
-    // Realized trade dollars by asset class.
-    const closed = await db.all("SELECT asset_type, pnl FROM trades WHERE status='closed'");
-    const tradeDollars = {};
-    for (const t of closed) tradeDollars[t.asset_type] = +((tradeDollars[t.asset_type] || 0) + (t.pnl || 0)).toFixed(2);
+    // Realized trade dollars by asset class — and by account label when trades are tagged.
+    const closed = await db.all("SELECT asset_type, account, pnl FROM trades WHERE status='closed'");
+    const tradeDollars = {}, accountDollars = {};
+    for (const t of closed) {
+      tradeDollars[t.asset_type] = +((tradeDollars[t.asset_type] || 0) + (t.pnl || 0)).toFixed(2);
+      const acct = t.account || "untagged";
+      accountDollars[acct] = +((accountDollars[acct] || 0) + (t.pnl || 0)).toFixed(2);
+    }
+    const hasAccounts = Object.keys(accountDollars).some((k) => k !== "untagged");
     res.json({
       finished: fin.length,
       by_source: groupBy(sourceOf),
@@ -190,6 +195,7 @@ router.get("/performance/attribution", async (_req, res) => {
       by_asset: groupBy((r) => r.asset_type),
       calibration_drift: drift,
       realized_trade_pnl_by_asset: tradeDollars,
+      realized_trade_pnl_by_account: hasAccounts ? accountDollars : undefined,
       note: "Shadow-graded recommendation outcomes split by origin, market regime at entry, and asset class — plus realized trade dollars. Small groups (n<10) are noise, not signal.",
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -231,12 +237,20 @@ router.get("/performance", async (_req, res) => {
       win_rate: trades.length ? +((tWins.length / trades.length) * 100).toFixed(1) : null,
       total_pnl: +trades.reduce((s, t) => s + (t.pnl || 0), 0).toFixed(2),
       avg_pnl_pct: avg(trades, (t) => t.pnl_pct || 0),
-      // Tax view: realized P&L split by holding period (≥365 days = long-term).
-      by_term: (() => {
+      // Tax view: realized P&L split by holding period (≥365 days = long-term) —
+      // and PER ACCOUNT when trades carry labels (IRA gains aren't taxable-account gains).
+      ...(() => {
         const term = (t) => (t.closed_at && t.entry_at && (Number(t.closed_at) - Number(t.entry_at)) >= 365 * 86400000 ? "long" : "short");
-        const sum = (which) => trades.filter((t) => term(t) === which);
         const mk = (arr) => ({ count: arr.length, pnl: +arr.reduce((s, t) => s + (t.pnl || 0), 0).toFixed(2) });
-        return { short: mk(sum("short")), long: mk(sum("long")) };
+        const split = (arr) => ({ short: mk(arr.filter((t) => term(t) === "short")), long: mk(arr.filter((t) => term(t) === "long")) });
+        const labels = [...new Set(trades.map((t) => t.account).filter(Boolean))].sort();
+        const by_account = labels.length ? Object.fromEntries(
+          [...labels, "untagged"].map((a) => {
+            const rows = trades.filter((t) => (a === "untagged" ? !t.account : t.account === a));
+            return [a, { ...mk(rows), by_term: split(rows) }];
+          }).filter(([, v]) => v.count > 0)
+        ) : undefined;
+        return { by_term: split(trades), by_account };
       })(),
     },
   });

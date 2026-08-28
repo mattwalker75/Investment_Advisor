@@ -28,7 +28,7 @@ which tools it consulted. Conversation persists in the browser (🗑 clears it).
 | `get_portfolio_concentration` | Sector concentration of your open positions + correlated-risk warnings. |
 | `compare_symbols` | 2–5 symbols side-by-side on your indicators, incl. relative strength vs SPY. |
 | `manage_watchlist` | List / add / remove watchlist entries and set price alerts (removal is confirm-first). |
-| `update_trade` | Updates an open trade's stop/targets plan — **always confirms the exact levels with you first**. |
+| `update_trade` | Updates an open trade's stop/targets plan (**always confirms the exact levels with you first**), journals a reflection in your words, and/or sets the account label ("move trade 12 to my IRA" — works on closed trades too). |
 | `get_economic_calendar` | High-impact US macro events (FOMC, CPI, jobs…) for the coming days (needs the free FMP key). |
 | `suggest_options_play` | Designs ONE options play within your allowed strategies, validated against the live chain (real strikes, premium from bid/ask mids, breakeven, max loss, IV); `save:true` tracks it as a premium-based shadow recommendation. |
 | `run_strategy` | Tests YOUR strategy: plain English → compiled spec (always shown back) → full simulation (long/short, options model-priced, crypto) → metrics + the advisor's own critique. `save_as` keeps it. |
@@ -36,7 +36,7 @@ which tools it consulted. Conversation persists in the browser (🗑 clears it).
 | `get_politician_trades` | Congressional disclosures — per person ("Pelosi") or the latest feed + most-active list. Disclosures lag 30–45 days; options show in descriptions; crypto essentially absent. |
 | `get_insider_trades` | SEC Form 4 insider filings for a stock with a buy/sell summary (degrades to a note if the FMP tier lacks it). |
 | `manage_alerts` | Your notification rules — "ping me if BTC breaks 70k" creates a real rule, evaluated every ~5 minutes; list/remove too. Includes headline-watch rules. |
-| `get_portfolio_risk` | The risk panel: total $ lost if every stop hits, no-stop positions flagged, biggest single risk — now including correlation ("effective positions") and move-together pair warnings. |
+| `get_portfolio_risk` | The risk panel: total $ lost if every stop hits, no-stop positions flagged, biggest single risk — including correlation ("effective positions") and move-together pair warnings. Can be narrowed to one account label ("how much am I risking in the IRA?"). |
 | `get_fundamentals` | Valuation/quality snapshot for a stock (P/E, margins, ROE, leverage, beta) — used to temper technical calls. |
 | `research_report` | "Write me a research note on NVDA" — runs **every** engine on one symbol and writes a structured note (thesis, technicals, valuation, catalysts, smart money, honest projection band, trade plan only if warranted, confidence). Slow; saved to the 📑 library on the Charts tab. |
 | `manage_memory` | Durable notes that persist across conversations (see below). |

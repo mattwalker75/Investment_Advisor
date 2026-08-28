@@ -4,6 +4,17 @@ All notable changes to Investment Advisor are tracked here.
 
 ## [Unreleased]
 
+### Added (batch 10)
+- 2026-08-28: **Multi-account tagging.** Trades carry an optional account label (IRA,
+  taxable, broker name — free text with suggestions from your existing labels): set it
+  when logging/taking a trade, via the 🏷 button (works on CLOSED trades — retagging
+  keeps the tax split honest), broker-CSV `account` columns import automatically, and
+  the chat's `update_trade` can move a trade ("put trade 12 in my IRA"). Flows
+  everywhere it matters: the Trades-tab account filter, the risk panel per account
+  (`?account=`, `none` = untagged; portfolio-wide correlation is honestly omitted under
+  a filter), the tax view split per account (IRA gains aren't taxable-account gains),
+  attribution's realized dollars by account, and the trades CSV export.
+
 ### Added (batch 9)
 - 2026-08-28: **Research report generator.** 📑 Research on the Charts tab (and the
   chat's `research_report` tool — "write me a research note on NVDA") runs EVERY

@@ -22,7 +22,7 @@ Local-only Express API (`127.0.0.1:8210`), no auth (single-user tool). All bodie
 | --- | --- |
 | `GET /api/trades[?status=open|closed]` | List; open rows include live last price, unrealized P&L (options ×100 off the chain mid), days-to-expiry, suggested stop, health verdict. |
 | `POST /api/trades` | Manual trade. Options: `asset_type:"option"` + `option_details:{type,strike,expiry}`. |
-| `PATCH /api/trades/:id` | Update the plan: `{stop_loss?, targets?}` (used by Apply-suggested-stop). |
+| `PATCH /api/trades/:id` | Update the plan: `{stop_loss?, targets?}` (open trades; used by Apply-suggested-stop) and/or the `{account}` label (any status — IRA vs taxable feeds the tax split, attribution, and per-account risk). |
 | `POST /api/trades/:id/exit` | Record a partial/full exit `{price, qty, reason}`; closes at zero qty. |
 | `POST /api/trades/health-check[?id=]` | AI health verdicts for all (or one) open position(s). |
 
@@ -51,7 +51,7 @@ Local-only Express API (`127.0.0.1:8210`), no auth (single-user tool). All bodie
 | `GET /api/research` · `/:id` · `DELETE /:id` | Research-note library (last 15): list metadata / full note / delete. |
 | `GET /api/briefing` · `POST /api/briefing` | Latest daily AI briefing / generate one now. |
 | `POST /api/ai/selftest` | AI live self-test: proves each pipeline (JSON contract, tool calling, scan gauntlet, options pass, strategy compile) against the configured model in miniature; per-check pass/fail with failure text. |
-| `GET /api/portfolio/risk` | Risk panel: total $ lost if every stop hits, no-stop flags, biggest single risk, per-position rows — plus `correlation` (pairwise ρ matrix, effective independent positions, move-together pairs). |
+| `GET /api/portfolio/risk` | Risk panel: total $ lost if every stop hits, no-stop flags, biggest single risk, per-position rows — plus `correlation` (pairwise ρ matrix, effective independent positions, move-together pairs). `?account=` narrows to one account label (`none` = untagged); the response lists the labels that exist. |
 | `POST /api/trades/:id/journal` | Append a timestamped journal note to a trade (open or closed) — the weekly review coaches from these. |
 | `GET /api/performance/attribution` | Outcomes split by source (scan/chat/options/your strategies), regime at entry, asset class; calibration drift; realized trade dollars. |
 | `GET/POST /api/review/weekly` | The weekly AI review (latest / generate): a candid retrospective with what-I'd-change suggestions. |

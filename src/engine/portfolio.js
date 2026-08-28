@@ -190,11 +190,16 @@ async function correlation() {
 // Risk per position = the loss if its stop hits (entry→stop distance × remaining qty,
 // ×100 for options). No stop set → the FULL position value counts as worst-case (and
 // gets flagged loudly). Long options are defined-risk: never more than the premium.
-async function riskPanel() {
+// opts.account narrows the panel to one account label ("none" = untagged trades).
+// The response always carries `accounts` (distinct labels among open trades) so the UI
+// can offer the filter only when labels actually exist.
+async function riskPanel({ account: accountFilter } = {}) {
   const s = settings.getSync();
   const account = s.preferences.risk.account_size || 10000;
-  const open = await db.all("SELECT * FROM trades WHERE status='open'");
-  if (!open.length) return { account_size: account, positions: [], total_value: 0, total_risk: 0, risk_pct_of_account: 0, no_stop_count: 0, warnings: [] };
+  let open = await db.all("SELECT * FROM trades WHERE status='open'");
+  const accounts = [...new Set(open.map((t) => t.account).filter(Boolean))].sort();
+  if (accountFilter) open = open.filter((t) => (accountFilter === "none" ? !t.account : t.account === accountFilter));
+  if (!open.length) return { account_size: account, account_filter: accountFilter || null, accounts, positions: [], total_value: 0, total_risk: 0, risk_pct_of_account: 0, no_stop_count: 0, warnings: [] };
   const { yahooSym } = require("../util");
   const quotes = await yahoo.quotes([...new Set(open.filter((t) => t.asset_type !== "option").map(yahooSym))]).catch(() => ({}));
   const rows = [];
@@ -222,7 +227,7 @@ async function riskPanel() {
     rows.push({
       symbol: t.symbol, asset_type: t.asset_type, side: t.side, qty: remaining,
       value, risk, risk_pct_of_account: +((risk / account) * 100).toFixed(2),
-      stop_loss: t.stop_loss, no_stop,
+      stop_loss: t.stop_loss, no_stop, account: t.account || null,
     });
   }
   rows.sort((a, b) => b.risk - a.risk);
@@ -231,14 +236,17 @@ async function riskPanel() {
   for (const r of rows.filter((x) => x.no_stop)) warnings.push(`⚠ ${r.symbol} has NO STOP — its full $${r.value.toFixed(0)} counts as risk. Set one (✎ in the table, or ask the advisor).`);
   for (const r of rows.filter((x) => !x.no_stop && x.risk_pct_of_account > perTrade * 3))
     warnings.push(`⚠ ${r.symbol} risks ${r.risk_pct_of_account}% of the account — ${(r.risk_pct_of_account / perTrade).toFixed(1)}× your ${perTrade}%/trade setting.`);
-  // Correlation: are these positions actually independent bets?
-  const corr = await correlation().catch(() => null);
+  // Correlation: are these positions actually independent bets? (Portfolio-wide by
+  // definition — skipped under an account filter rather than shown mislabeled.)
+  const corr = accountFilter ? null : await correlation().catch(() => null);
   if (corr) {
     for (const p of corr.high_pairs.slice(0, 4))
       warnings.push(`⚠ ${p.a} & ${p.b} move together (ρ ${p.rho}) — two tickers, closer to one bet.`);
   }
   return {
     account_size: account,
+    account_filter: accountFilter || null,
+    accounts,
     total_value: +totalValue.toFixed(2),
     total_risk: +totalRisk.toFixed(2),
     risk_pct_of_account: +((totalRisk / account) * 100).toFixed(2),
