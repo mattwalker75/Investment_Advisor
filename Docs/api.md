@@ -47,6 +47,8 @@ Local-only Express API (`127.0.0.1:8210`), no auth (single-user tool). All bodie
 | Endpoint | Purpose |
 | --- | --- |
 | `POST /api/recommendations/:id/revalidate` | AI re-checks an open rec against current data → valid / adjust / withdraw. |
+| `POST /api/research` | Generate a full research note on one symbol (`{symbol, asset_type?}`): every engine — technicals, fundamentals, news, insiders, congress activity, options posture, projection cone, regime, and the system's own track record on the name — composed into a structured AI note. Slow by design; saved to the library. |
+| `GET /api/research` · `/:id` · `DELETE /:id` | Research-note library (last 15): list metadata / full note / delete. |
 | `GET /api/briefing` · `POST /api/briefing` | Latest daily AI briefing / generate one now. |
 | `POST /api/ai/selftest` | AI live self-test: proves each pipeline (JSON contract, tool calling, scan gauntlet, options pass, strategy compile) against the configured model in miniature; per-check pass/fail with failure text. |
 | `GET /api/portfolio/risk` | Risk panel: total $ lost if every stop hits, no-stop flags, biggest single risk, per-position rows — plus `correlation` (pairwise ρ matrix, effective independent positions, move-together pairs). |

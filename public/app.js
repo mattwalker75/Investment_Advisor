@@ -1155,6 +1155,53 @@ $("pred-h").addEventListener("change", async () => {
   } catch (e) { $("chart-info").textContent = "⚠ cone failed — " + e.message; }
 });
 
+/* ---------- research notes (📑) ---------- */
+// One click runs every engine on the charted symbol and the AI writes a structured
+// research note. Slow by design (many data fetches + a long write) — the button shows
+// progress and the finished note lands in a library (last 15) browsable from the modal.
+function researchModal(r, library) {
+  const opts = (library || []).map((x) =>
+    `<option value="${esc(x.id)}"${r && x.id === r.id ? " selected" : ""}>${esc(x.symbol)} · ${fmtDT(x.at)}</option>`).join("");
+  modal(`<h3 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">📑 ${r ? esc(r.title) : "Research library"}
+      <select id="res-lib" class="short-in" style="width:auto" title="saved research notes (last 15)">
+        <option value="">library…</option>${opts}</select>
+      ${r ? `<button class="ghost small" id="res-del" title="delete this note">🗑</button>` : ""}</h3>
+    ${r ? `<div class="hint" style="margin-bottom:8px">${fmtDT(r.at)} · ${esc(r.model || "")} — research, not financial advice</div>
+           <div class="briefing" style="max-height:60vh;overflow:auto">${mdLite(r.text)}</div>`
+        : `<div class="hint">No saved notes yet — open a chart and click 📑 Research.</div>`}
+    <div class="actions"><button class="ghost" id="m-cancel">Close</button></div>`);
+  $("m-cancel").onclick = closeModal;
+  $("res-lib").onchange = async () => {
+    const id = $("res-lib").value;
+    if (!id) return;
+    try { researchModal(await api(`/api/research/${encodeURIComponent(id)}`), library); } catch (e) { alert(e.message); }
+  };
+  const del = $("res-del");
+  if (del) del.onclick = async () => {
+    // confirmDialog closes the modal either way — reopen the note on cancel.
+    if (!(await confirmDialog({ title: "Delete this research note?", confirmText: "Delete" }))) return researchModal(r, library);
+    try {
+      await api(`/api/research/${encodeURIComponent(r.id)}`, { method: "DELETE" });
+      researchModal(null, library.filter((x) => x.id !== r.id));
+    } catch (e) { alert(e.message); }
+  };
+}
+$("research-lib-btn").addEventListener("click", async () => {
+  try { researchModal(null, await api("/api/research")); } catch (e) { alert(e.message); }
+});
+$("research-btn").addEventListener("click", async () => {
+  const btn = $("research-btn");
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = "📑 writing…";
+  try {
+    const r = await api("/api/research", { method: "POST", body: JSON.stringify({ symbol: curSymbol }) });
+    const library = await api("/api/research").catch(() => []);
+    researchModal(r, library);
+  } catch (e) { alert("Research note failed — " + e.message); }
+  finally { btn.disabled = false; btn.textContent = orig; }
+});
+
 async function loadChart(symbol) {
   curSymbol = symbol.toUpperCase();
   $("chart-symbol").value = curSymbol;

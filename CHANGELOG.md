@@ -4,6 +4,17 @@ All notable changes to Investment Advisor are tracked here.
 
 ## [Unreleased]
 
+### Added (batch 9)
+- 2026-08-28: **Research report generator.** 📑 Research on the Charts tab (and the
+  chat's `research_report` tool — "write me a research note on NVDA") runs EVERY
+  engine on one symbol — technicals, fundamentals, news, insiders, congress activity,
+  options posture, projection cone, market regime, and the system's own shadow-graded
+  history on the name — and the AI writes a structured note: thesis, technical picture,
+  valuation, catalysts & risks, smart money, the honest p10–p90 projection band, a
+  trade plan only if warranted, and confidence with what-would-change-my-mind. Notes
+  land in a browsable library (last 15, 🗂 to open without generating;
+  `POST/GET/DELETE /api/research`). Slow by design; research, not advice.
+
 ### Added (batch 8)
 - 2026-08-28: **Fundamentals layer.** Every shortlisted stock candidate now carries a
   compact valuation/quality block (market cap, beta, P/E / P/S / P/B TTM, margins, ROE,

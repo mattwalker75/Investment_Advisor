@@ -43,6 +43,30 @@ router.post("/review/weekly", async (_req, res) => {
   catch (e) { res.status(502).json({ error: e.message }); }
 });
 
+// ---------- Research reports ----------
+// One command runs every engine on a symbol and the AI writes a structured research
+// note (thesis, technicals, valuation, catalysts, smart money, projection, trade plan,
+// confidence). Notes live in a small library (last 15).
+router.post("/research", async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!b.symbol) return res.status(400).json({ error: "symbol required" });
+    res.json(await require("../engine/research").generateReport(b.symbol, b.asset_type));
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+router.get("/research", async (_req, res) => {
+  const list = await require("../engine/research").listReports();
+  res.json(list.map(({ text, ...meta }) => ({ ...meta, chars: (text || "").length })));
+});
+router.get("/research/:id", async (req, res) => {
+  const r = await require("../engine/research").getReport(req.params.id);
+  if (!r) return res.status(404).json({ error: "report not found" });
+  res.json(r);
+});
+router.delete("/research/:id", async (req, res) => {
+  res.json(await require("../engine/research").deleteReport(req.params.id));
+});
+
 // ---------- Threshold backtester ----------
 router.post("/backtest", async (req, res) => {
   try {

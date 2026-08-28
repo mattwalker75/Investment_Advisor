@@ -38,6 +38,7 @@ which tools it consulted. Conversation persists in the browser (🗑 clears it).
 | `manage_alerts` | Your notification rules — "ping me if BTC breaks 70k" creates a real rule, evaluated every ~5 minutes; list/remove too. Includes headline-watch rules. |
 | `get_portfolio_risk` | The risk panel: total $ lost if every stop hits, no-stop positions flagged, biggest single risk — now including correlation ("effective positions") and move-together pair warnings. |
 | `get_fundamentals` | Valuation/quality snapshot for a stock (P/E, margins, ROE, leverage, beta) — used to temper technical calls. |
+| `research_report` | "Write me a research note on NVDA" — runs **every** engine on one symbol and writes a structured note (thesis, technicals, valuation, catalysts, smart money, honest projection band, trade plan only if warranted, confidence). Slow; saved to the 📑 library on the Charts tab. |
 | `manage_memory` | Durable notes that persist across conversations (see below). |
 
 ## Slash commands
