@@ -1,7 +1,25 @@
 "use strict";
-/* Investment Advisor — frontend. Plain JS, no framework: tabs, dashboard, recommendation
-   cards, candlestick charts (lightweight-charts) with opt-in indicator overlays, trade
-   tracking, performance stats, and the settings forms. */
+/* Investment Advisor — frontend. Plain JS, no framework.
+ *
+ * SECTION INDEX (search for the "----------" markers):
+ *   helpers            $/esc/api/formatters/ago
+ *   market strip       loadMarketStrip + provider-health indicator
+ *   scan               scan button + status polling
+ *   dashboard          loadDashboard, briefing, sentiment, news, advisor prompts
+ *   position sizing    risk-based suggested size math
+ *   recommendations    filters, loadRecs, recCard
+ *   modal helpers      modal/closeModal/confirmDialog + take-trade/option modals
+ *   watchlist          loadWatchlist + add/edit/delete
+ *   trades             health check, manual trade, CSV import, exits, loadTrades
+ *   performance        loadPerformance, equity curve, calibration, backtester
+ *   charts             lightweight-charts setup, overlays, plan lines, compare,
+ *                      user-drawn levels, symbol search
+ *   settings           loadSettings (all forms) + save wiring
+ *   view               applyView (tab/card visibility)
+ *   events             refreshEvents (activity feed + desktop alerts, one loop)
+ *   advisor chat       drawer, streaming, slash commands
+ *   boot               init sequence + background intervals
+ */
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -203,7 +221,10 @@ async function refreshRecPrices() {
 }
 
 async function loadRecs() {
-  const all = await api("/api/recommendations").catch(() => []);
+  if (!$("recs-list").childElementCount) $("recs-list").innerHTML = loadingHtml;
+  let all;
+  try { all = await api("/api/recommendations"); }
+  catch (e) { errState($("recs-list"), "Couldn't load recommendations — " + e.message, loadRecs); $("recs-count").textContent = ""; return; }
   let list = recsFilter === "all" ? all
     : recsFilter === "finished" ? all.filter((r) => ["stopped", "target_hit", "expired", "closed"].includes(r.status))
     : all.filter((r) => ["open", "tracking"].includes(r.status));
@@ -218,12 +239,17 @@ async function loadRecs() {
     const takeOpt = el.querySelector(".take-option");
     if (takeOpt) takeOpt.addEventListener("click", (e) => { e.stopPropagation(); takeOptionModal(r); });
     const dis = el.querySelector(".dismiss");
-    if (dis) dis.addEventListener("click", async (e) => { e.stopPropagation(); await api(`/api/recommendations/${r.id}/dismiss`, { method: "POST" }); loadRecs(); });
+    if (dis) dis.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!await confirmDialog({ title: `Dismiss ${r.symbol}?`, message: "The idea closes as <b>dismissed</b> and stops being tracked. This can't be undone.", confirmText: "Dismiss" })) return;
+      await api(`/api/recommendations/${r.id}/dismiss`, { method: "POST" }); loadRecs();
+    });
     const ch = el.querySelector(".to-chart");
     if (ch) ch.addEventListener("click", (e) => { e.stopPropagation(); openChart(r.asset_type === "crypto" && !r.symbol.includes("-") ? r.symbol + "-USD" : r.symbol, { entry_low: r.entry_low, entry_high: r.entry_high, stop_loss: r.stop_loss, targets: r.targets }); });
     const cp = el.querySelector(".complete-btn");
     if (cp) cp.addEventListener("click", async (e) => {
       e.stopPropagation();
+      if (!await confirmDialog({ title: `Mark ${r.symbol} complete?`, message: r.status === "tracking" ? "A tracking idea is graded at the <b>current price</b> (hit targets keep their rungs) and counts in the stats." : "The idea closes without a graded outcome.", confirmText: "Complete", danger: false })) return;
       try { const v = await api(`/api/recommendations/${r.id}/complete`, { method: "POST" });
         if (v.pnl_pct != null) alert(`Completed — shadow outcome ${v.pnl_pct > 0 ? "+" : ""}${v.pnl_pct}%`);
         loadRecs(); loadDashboard(); }
@@ -321,6 +347,29 @@ function recCard(r) {
 /* ---------- modal helpers ---------- */
 function modal(html) { $("modal-box").innerHTML = html; $("modal").hidden = false; }
 function closeModal() { $("modal").hidden = true; }
+
+// Styled confirm dialog (replaces native confirm-less destructive clicks): resolves
+// true only on explicit confirmation; backdrop click / Cancel resolve false.
+function confirmDialog({ title = "Are you sure?", message = "", confirmText = "Confirm", danger = true } = {}) {
+  return new Promise((resolve) => {
+    modal(`<h3>${esc(title)}</h3>
+      ${message ? `<div class="hint" style="margin-bottom:12px">${message}</div>` : ""}
+      <div class="actions"><button class="ghost" id="m-cancel">Cancel</button>
+      <button class="${danger ? "danger" : "primary"}" id="m-go">${esc(confirmText)}</button></div>`);
+    const backdrop = (e) => { if (e.target === $("modal")) done(false); };
+    const done = (v) => { $("modal").removeEventListener("click", backdrop); closeModal(); resolve(v); };
+    $("modal").addEventListener("click", backdrop);
+    $("m-cancel").addEventListener("click", () => done(false));
+    $("m-go").addEventListener("click", () => done(true));
+  });
+}
+
+// Async panel states: consistent loading + error-with-retry (no more silent blanks).
+const loadingHtml = '<div class="hint">Loading…</div>';
+function errState(el, msg, retry) {
+  el.innerHTML = `<div class="err-state">⚠ ${esc(msg)}<button class="ghost small">Retry</button></div>`;
+  el.querySelector("button").addEventListener("click", retry);
+}
 $("modal").addEventListener("click", (e) => { if (e.target === $("modal")) closeModal(); });
 
 function takeTradeModal(r) {
@@ -361,7 +410,10 @@ function takeOptionModal(r) {
 
 /* ---------- watchlist ---------- */
 async function loadWatchlist() {
-  const rows = await api("/api/watchlist").catch(() => []);
+  if (!$("wl-list").childElementCount) $("wl-list").innerHTML = loadingHtml;
+  let rows;
+  try { rows = await api("/api/watchlist"); }
+  catch (e) { errState($("wl-list"), "Couldn't load the watchlist — " + e.message, loadWatchlist); return; }
   $("wl-list").innerHTML = rows.length ? `<table class="grid"><thead><tr>
       <th>Symbol</th><th>Name</th><th>Price</th><th>Day</th><th>Alert above</th><th>Alert below</th><th></th>
     </tr></thead><tbody>${rows.map((w) => `<tr>
@@ -375,7 +427,11 @@ async function loadWatchlist() {
           <button class="ghost small" data-wledit="${w.id}" data-above="${w.alert_above ?? ""}" data-below="${w.alert_below ?? ""}">✎</button>
           <button class="ghost small" data-wldel="${w.id}">✖</button></td></tr>`).join("")}</tbody></table>`
     : '<div class="hint">Nothing watched yet. Add a symbol above — it will join every scan with priority and alert you at your levels.</div>';
-  document.querySelectorAll("[data-wldel]").forEach((b) => b.addEventListener("click", async () => { await api("/api/watchlist/" + b.dataset.wldel, { method: "DELETE" }); loadWatchlist(); }));
+  document.querySelectorAll("[data-wldel]").forEach((b) => b.addEventListener("click", async () => {
+    const row = rows.find((w) => w.id === Number(b.dataset.wldel));
+    if (!await confirmDialog({ title: `Remove ${row ? row.symbol : "this symbol"} from the watchlist?`, message: "It stops joining scans and its alerts are deleted.", confirmText: "Remove" })) return;
+    await api("/api/watchlist/" + b.dataset.wldel, { method: "DELETE" }); loadWatchlist();
+  }));
   document.querySelectorAll("[data-wlchart]").forEach((b) => b.addEventListener("click", () => openChart(b.dataset.wlchart)));
   document.querySelectorAll("[data-wledit]").forEach((b) => b.addEventListener("click", () => {
     modal(`<h3>Edit alerts</h3>
@@ -498,7 +554,10 @@ function exitModal(t, remaining) {
 }
 
 async function loadTrades() {
-  const trades = await api("/api/trades").catch(() => []);
+  if (!$("trades-open").childElementCount) $("trades-open").innerHTML = loadingHtml;
+  let trades;
+  try { trades = await api("/api/trades"); }
+  catch (e) { errState($("trades-open"), "Couldn't load trades — " + e.message, loadTrades); return; }
   const open = trades.filter((t) => t.status === "open");
   const closed = trades.filter((t) => t.status === "closed");
   $("trades-badge").hidden = !open.length;
@@ -581,8 +640,9 @@ async function loadTrades() {
 
 /* ---------- performance ---------- */
 async function loadPerformance() {
-  const p = await api("/api/performance").catch(() => null);
-  if (!p) return;
+  let p;
+  try { p = await api("/api/performance"); }
+  catch (e) { errState($("perf-rec-tiles"), "Couldn't load performance — " + e.message, loadPerformance); return; }
   const R = p.recommendations, T = p.trades;
   $("perf-rec-tiles").innerHTML = `
     <div class="tile"><div class="v">${R.total}</div><div class="l">total recs</div></div>
@@ -1206,6 +1266,11 @@ function chatOpen() {
 function chatClose() { chatDrawer.classList.remove("open"); $("drawer-backdrop").hidden = true; }
 $("chat-btn").addEventListener("click", chatOpen);
 $("chat-close").addEventListener("click", chatClose);
+// Dashboard "Ask the Advisor" prompt chips: open the drawer and send the question.
+document.querySelectorAll("#card-advisor .chip").forEach((c) => c.addEventListener("click", () => {
+  chatOpen();
+  sendChat(c.dataset.q);
+}));
 $("drawer-backdrop").addEventListener("click", chatClose);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && chatDrawer.classList.contains("open")) chatClose(); });
 $("chat-clear").addEventListener("click", () => { chatHistory = []; localStorage.removeItem("advisor_chat"); chatMsgs.innerHTML = ""; renderMsg("ai", "Conversation cleared. What shall we look at?"); });

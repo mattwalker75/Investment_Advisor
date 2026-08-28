@@ -51,6 +51,17 @@ button.ghost { background: transparent; border: 1px solid var(--edge); color: va
   border-radius: 8px; padding: 6px 12px; }
 button.ghost:hover { color: var(--text); border-color: var(--accent-dim); }
 button.ghost.small { padding: 2px 9px; font-size: .78rem; }
+button.danger { background: linear-gradient(180deg, #f87171, #b91c1c); color: #fff; border: none;
+  border-radius: 10px; padding: 9px 18px; font-weight: 600; box-shadow: 0 2px 14px rgba(248,113,113,.3); }
+button.danger:hover { filter: brightness(1.12); }
+
+/* Async panel states: consistent error + retry instead of silent blanks. */
+.err-state { background: rgba(248,113,113,.08); border: 1px solid rgba(248,113,113,.35); color: var(--red);
+  border-radius: 10px; padding: 10px 14px; font-size: .85rem; display: flex; align-items: center; gap: 10px; }
+
+/* Dashboard "Ask the Advisor" prompt chips. */
+.advisor-prompts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.advisor-prompts .chip { cursor: pointer; }
 
 /* ---------- tabs ---------- */
 .tabs { display: flex; gap: 4px; padding: 8px 16px 0; border-bottom: 1px solid var(--edge);
