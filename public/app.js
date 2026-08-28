@@ -1200,7 +1200,9 @@ async function loadSettings() {
     <div class="frow"><label>Failover URL</label><input type="text" id="ai-fo-url" value="${esc((s.ai.failover && s.ai.failover.base_url) || "")}" placeholder="empty = same endpoint"></div>
     <div class="frow"><label>Failover key</label><input type="password" id="ai-fo-key" value="${esc((s.ai.failover && s.ai.failover.api_key) || "")}" placeholder="empty = same key"></div>
     <div class="frow"><label>Failover model</label><input type="text" id="ai-fo-model" value="${esc((s.ai.failover && s.ai.failover.model) || "")}" placeholder="e.g. a cloud model as backup"></div>
-    <div class="save-row"><button class="primary" id="save-ai">Save</button><button class="ghost" id="test-ai">Test connection</button><span id="note-ai"></span></div>
+    <div class="save-row"><button class="primary" id="save-ai">Save</button><button class="ghost" id="test-ai">Test connection</button>
+      <button class="ghost" id="selftest-ai" title="Prove every AI pipeline (JSON contract, tool calling, scan, options, strategy compile) against the saved model — run after any model change">🧪 Test AI features</button><span id="note-ai"></span></div>
+    <div id="selftest-results"></div>
   </div>
 
   <div class="sform" id="sf-db">
@@ -1396,6 +1398,24 @@ async function loadSettings() {
       }) });
       note("note-ai", "Saved ✓");
     } catch (e) { note("note-ai", e.message, false); }
+  });
+  // AI live self-test: exercises the real pipelines in miniature against the SAVED model.
+  $("selftest-ai").addEventListener("click", async () => {
+    const btn = $("selftest-ai");
+    btn.disabled = true;
+    $("selftest-results").innerHTML = '<div class="hint">Running the AI pipelines against your saved model… (slow local models can take a few minutes)</div>';
+    try {
+      const r = await api("/api/ai/selftest", { method: "POST" });
+      $("selftest-results").innerHTML = `
+        <div class="hint" style="margin:6px 0"><b>${r.summary.passed}/${r.summary.total} passed</b> — ${esc(r.summary.verdict)}${r.aborted ? " · ⚠ " + esc(r.aborted) : ""}</div>
+        <table class="grid"><thead><tr><th>Check</th><th></th><th>Time</th><th>Detail</th></tr></thead>
+        <tbody>${r.results.map((t) => `<tr>
+          <td>${esc(t.name)}</td>
+          <td>${t.ok ? '<span class="up">✓</span>' : '<span class="down">✗</span>'}</td>
+          <td class="mono hint">${(t.ms / 1000).toFixed(1)}s</td>
+          <td class="hint">${esc(t.ok ? t.note : t.error)}</td></tr>`).join("")}</tbody></table>`;
+    } catch (e) { $("selftest-results").innerHTML = `<div class="err-state">⚠ ${esc(e.message)}</div>`; }
+    finally { btn.disabled = false; }
   });
   $("test-ai").addEventListener("click", async () => {
     note("note-ai", "testing…");

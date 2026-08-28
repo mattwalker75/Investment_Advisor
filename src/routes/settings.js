@@ -68,6 +68,13 @@ router.post("/ai/models", async (req, res) => {
   } catch (e) { res.status(502).json({ error: e.message }); }
 });
 
+// AI live self-test: prove every AI pipeline against the configured model in miniature.
+// Can take a few minutes on slow local models — the UI shows per-check progress text.
+router.post("/ai/selftest", async (_req, res) => {
+  try { res.json(await require("../engine/selftest").runSelfTest()); }
+  catch (e) { res.status(502).json({ error: e.message }); }
+});
+
 // DB connection config (ADVISOR_CONFIG.json — the one file-based setting). Password masked.
 router.get("/db/config", (_req, res) => {
   try {
