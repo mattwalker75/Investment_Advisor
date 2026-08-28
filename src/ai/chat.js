@@ -139,7 +139,8 @@ const TOOL_DEFS = [
     { description: { type: "string", description: "the strategy in plain English (or omit and use name)" },
       name: { type: "string", description: "a saved strategy's name to run" },
       symbols: { type: "array", items: { type: "string" }, description: "optional universe override, up to 10 symbols" },
-      save_as: { type: "string", description: "save the compiled spec under this name" } }),
+      save_as: { type: "string", description: "save the compiled spec under this name" },
+      live: { type: "boolean", description: "with save_as: also enable LIVE screening — entry signals on fresh bars raise alerts (~30 min cadence)" } }),
   T("get_prediction", "PROJECTION CONE for a stock or crypto at a horizon (1h 4h 1d 1w 1m 3m 6m 1y): statistically likely price range from realized volatility — quantile bands (p10/p25/p50/p75/p90) that WIDEN with time. This is a probability range, NOT a directional forecast: when you add your directional lean, state it WITH your confidence and always cite the band width honestly (e.g. 'the 90% range at 3 months spans X–Y; my lean is mildly higher because…'). Consider get_analysis + get_news for the qualitative side.",
     { symbol: { type: "string" }, horizon: { type: "string", enum: ["1h", "4h", "1d", "1w", "1m", "3m", "6m", "1y"], description: "default 1m" },
       asset_type: { type: "string", enum: ["stock", "crypto"] } }, ["symbol"]),
@@ -423,8 +424,9 @@ async function execTool(name, args = {}) {
       const notes = spec._compile_notes; delete spec._compile_notes;
       const results = await lab.runStrategy(spec);
       if (args.save_as) {
-        await lab.saveStrategy({ ...results.spec, name: String(args.save_as).slice(0, 60) });
+        await lab.saveStrategy({ ...results.spec, name: String(args.save_as).slice(0, 60), live: args.live === true });
         results.saved_as = String(args.save_as).slice(0, 60);
+        if (args.live) results.live_note = "Live screening enabled — fresh entry signals will alert (~30 min cadence).";
       }
       if (notes) results.compile_notes = notes;
       // strip per-trade detail to keep the tool result lean; the model critiques from the aggregates

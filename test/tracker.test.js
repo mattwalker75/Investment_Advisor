@@ -98,6 +98,36 @@ test("option TRADE with premium_levels: alerts price off the chain, never the un
   await db.run("DELETE FROM trades");
 });
 
+test("live strategy signals: edge-triggered fire, no re-spam while active, signal→rec through the gauntlet", async () => {
+  // Craft candles whose LAST bar satisfies rsi<45 (down-drift tail) so the signal fires.
+  const base = require("./helpers").syntheticCandles(200);
+  const falling = base.map((c, i) => (i > 170 ? { ...c, open: c.open - (i - 170) * 1.5, high: c.high - (i - 170) * 1.5, low: c.low - (i - 170) * 1.5, close: c.close - (i - 170) * 1.5 } : c));
+  const yahooStub = require.cache[require.resolve("../src/providers/yahoo.js")].exports;
+  const oldHistory = yahooStub.history;
+  yahooStub.history = async () => falling;
+
+  const lab = require("../src/engine/strategylab");
+  await lab.saveStrategy({
+    name: "sig test", timeframe: "1d", direction: "long", universe: ["SIGCO"], live: true, signal_to_rec: true,
+    entry: { logic: "all", conditions: [{ left: "rsi", op: "<", right: 45 }] },
+    exit: { stop: { type: "atr", multiple: 2 }, targets: [{ rr: 2, sell_pct: 100 }], trail: null, max_hold_bars: 30 },
+  });
+  const first = await lab.evaluateLiveSignals();
+  assert.strictEqual(first.signals, 1, "signal fires on the fresh bar");
+  const again = await lab.evaluateLiveSignals();
+  assert.strictEqual(again.signals, 0, "edge-triggered: no re-spam while the condition stays true");
+  const ev = await db.get("SELECT message FROM events WHERE type='strategy_signal' ORDER BY id DESC LIMIT 1");
+  assert.match(ev.message, /sig test.*SIGCO/);
+  const rec = await db.get("SELECT * FROM recommendations WHERE symbol='SIGCO'");
+  assert.ok(rec, "signal_to_rec must create a recommendation");
+  const { J: JJ } = require("../src/util");
+  assert.strictEqual(JJ(rec.inputs, {}).source, "strategy_signal");
+  assert.ok(rec.risk_reward >= 1.5, "went through the real gauntlet");
+  await lab.deleteStrategy("sig test");
+  await db.run("DELETE FROM recommendations WHERE symbol='SIGCO'");
+  yahooStub.history = oldHistory;
+});
+
 test("option rec at expiry: tracking settles at intrinsic (expired_settled), open expires", async () => {
   const past = "2000-01-01";
   const mk = (sym, status, outcome) => db.run(

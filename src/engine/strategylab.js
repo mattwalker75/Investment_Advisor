@@ -109,6 +109,11 @@ function validateSpec(raw) {
     if (spec.timeframe !== "1d") throw new Error("option instruments are daily-timeframe only (model-priced per daily bar)");
   }
   spec.days = Math.max(60, Math.min(1825, Math.round(raw.days || (spec.timeframe === "1h" ? 60 : 400))));
+  // Live-signal flags: `live` makes the strategy a SCREENER (entry conditions evaluated
+  // on the freshest bar on a schedule); `signal_to_rec` additionally turns each signal
+  // into a validated, shadow-tracked recommendation.
+  spec.live = raw.live === true;
+  spec.signal_to_rec = raw.signal_to_rec === true;
   return spec;
 }
 
@@ -418,6 +423,100 @@ Be honest about limits: slippage is modeled, IV effects are not (if model_priced
   return String(content || "").trim();
 }
 
+// ---- Live signals: saved strategies as SCREENERS ----
+// Edge-triggered: a signal fires when the entry conditions BECOME true on the freshest
+// bar, then stays quiet while they remain true (no daily re-spam), re-arming once they
+// go false. Per-strategy/symbol state lives in its own KV key.
+const SIGNAL_STATE_KEY = "strategy_signal_state";
+
+async function evaluateLiveSignals() {
+  const db = require("../db");
+  const { logEvent } = require("../events");
+  const liveSpecs = (await listStrategies()).filter((s) => s.live);
+  if (!liveSpecs.length) return { strategies: 0, signals: 0 };
+  const cfg = settings.getSync().indicators;
+  const row = await db.get("SELECT value FROM settings WHERE `key`=?", [SIGNAL_STATE_KEY]).catch(() => null);
+  const state = (row ? J(row.value, {}) : {}) || {};
+  let signals = 0;
+
+  for (const spec of liveSpecs) {
+    const st = (state[spec.name] = state[spec.name] || {});
+    const symbols = (await resolveUniverse(spec).catch(() => [])).slice(0, 25);
+    for (const sym of symbols) {
+      try {
+        const S = String(sym).toUpperCase();
+        const candles = await yahoo.history(S, Math.min(spec.days, 200), spec.timeframe);
+        if (!candles || candles.length < 80) continue;
+        const { series } = indicators.computeAllCached(`lab:${S}:${spec.timeframe}:sig`, candles, cfg);
+        const ops = buildOperands(candles, series);
+        const i = candles.length - 1;
+        const active = entryAt(spec, ops, i);
+        const wasActive = !!(st[S] && st[S].active);
+        st[S] = { active, bar: String(candles[i].time) };
+        if (!active || wasActive) continue;                 // edge-trigger only
+        signals++;
+        const close = candles[i].close;
+        const condStr = spec.entry.conditions.map((c) => `${c.left} ${c.op} ${c.right}`).join(spec.entry.logic === "any" ? " OR " : " AND ");
+        await logEvent("strategy_signal", "strategy", null, S,
+          `⚡ Strategy "${spec.name}" fired on ${S} @ ${close} (${condStr})`);
+        if (spec.signal_to_rec) {
+          const made = await signalToRec(spec, S, close, ops, i, condStr).catch((e) => ({ skipped: e.message }));
+          if (made && made.skipped)
+            await logEvent("strategy_signal", "strategy", null, S, `⚡ "${spec.name}" signal on ${S} not saved as a recommendation — ${made.skipped}`);
+        }
+      } catch (_) { /* per-symbol tolerance */ }
+    }
+  }
+  await db.run(db.upsertSql("settings", ["key", "value", "updated_at"], "key"),
+    [SIGNAL_STATE_KEY, JSON.stringify(state), Date.now()]);
+  return { strategies: liveSpecs.length, signals };
+}
+
+// Turn a fired signal into a REAL recommendation: mechanical levels from the spec's
+// exit model, pushed through the SAME validation gauntlet + duplicate guard as
+// everything else — your strategies get shadow-tracked and honestly graded too.
+async function signalToRec(spec, sym, close, ops, i, condStr) {
+  const db = require("../db");
+  const { logEvent } = require("../events");
+  const recommender = require("./recommender");
+  const prefs = settings.getSync().preferences;
+  const side = spec.direction === "short" ? "sell" : "buy";
+  if (side === "sell" && prefs.risk.allow_shorts === false) return { skipped: "shorts are disabled in preferences" };
+  const atrNow = ops.atr[i];
+  const dist = spec.exit.stop.type === "pct" ? close * (spec.exit.stop.pct / 100) : (atrNow ? atrNow * spec.exit.stop.multiple : null);
+  if (!dist || !isFinite(dist)) return { skipped: "no ATR available to size the stop" };
+  const sgn = side === "buy" ? 1 : -1;
+  const barsPerDay = spec.timeframe === "1h" ? 6.5 : 1;
+  const raw = {
+    symbol: sym, side,
+    entry_low: +(close * 0.995).toFixed(6), entry_high: +(close * 1.005).toFixed(6),
+    stop_loss: +(close - sgn * dist).toFixed(6),
+    targets: spec.exit.targets.map((t) => ({ price: +(close + sgn * t.rr * dist).toFixed(6), sell_pct: t.sell_pct })),
+    confidence: Math.max(prefs.risk.min_confidence, 0.6),
+    horizon_min_days: 1, horizon_max_days: Math.max(2, Math.ceil(spec.exit.max_hold_bars / barsPerDay)),
+    rationale: `Mechanical signal from YOUR strategy "${spec.name}": ${condStr} on the latest ${spec.timeframe} bar (close ${close}). Levels from the spec's exit model (${spec.exit.stop.type} stop, R-multiple ladder). Not an AI judgment — your rules, executed and shadow-tracked.`,
+  };
+  const candidateMap = { [sym]: { symbol: sym, asset_type: /-USD$/.test(sym) ? "crypto" : "stock", name: sym, price: close } };
+  const rec = recommender.validateRec(raw, candidateMap, prefs);
+  if (!rec) return { skipped: `validation rejected it (usually the ladder's reward:risk vs your ${prefs.risk.min_risk_reward} minimum)` };
+  const dup = await recommender.duplicateOf(rec);
+  if (dup) return { skipped: `duplicate of active recommendation #${dup.id}` };
+  const expiryMs = (settings.getSync().schedule.rec_expiry_days || 10) * 86400000;
+  const res = await db.run(
+    `INSERT INTO recommendations
+     (run_id, created_at, asset_type, symbol, name, side, current_price, entry_low, entry_high,
+      stop_loss, targets, horizon_min_days, horizon_max_days, confidence, risk_reward, rationale,
+      options_play, inputs, status, expires_at)
+     VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?)`,
+    [Date.now(), rec.asset_type, rec.symbol, rec.name, rec.side, rec.current_price, rec.entry_low, rec.entry_high,
+     rec.stop_loss, JSON.stringify(rec.targets), rec.horizon_min_days, rec.horizon_max_days, rec.confidence,
+     rec.risk_reward, rec.rationale, JSON.stringify({ source: "strategy_signal", strategy: spec.name, saved_at: new Date().toISOString() }),
+     "open", Date.now() + expiryMs]);
+  await logEvent("rec_new", "recommendation", res.lastID, rec.symbol,
+    `⚡ Strategy "${spec.name}" idea saved: ${rec.side.toUpperCase()} ${rec.symbol} @ ${rec.entry_low}-${rec.entry_high} (R:R ${rec.risk_reward})`);
+  return { id: res.lastID };
+}
+
 // ---- Saved strategies (settings KV, like advisor memory) ----
 const KEY = "strategies";
 async function listStrategies() {
@@ -448,5 +547,6 @@ async function deleteStrategy(name) {
 module.exports = {
   validateSpec, runStrategy, compileStrategy, critiqueStrategy,
   listStrategies, saveStrategy, deleteStrategy,
+  evaluateLiveSignals, signalToRec,
   simulateSymbol, buildOperands, condTrue, bsPrice, realizedVol, OPERANDS, OPS,
 };

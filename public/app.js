@@ -921,6 +921,28 @@ $("lab-del").addEventListener("click", async () => {
   await api("/api/strategies/" + encodeURIComponent(name), { method: "DELETE" });
   labRefreshSaved();
 });
+// Live-signal flags on the selected saved strategy: ⚡ makes it a screener (alerts on
+// fresh entry signals), 🎯 additionally turns each signal into a tracked recommendation.
+async function labToggleFlag(flag) {
+  const name = $("lab-saved").value;
+  if (!name) { $("lab-flags").textContent = "select a saved strategy first"; return; }
+  const list = await api("/api/strategies").catch(() => []);
+  const s = list.find((x) => x.name === name);
+  if (!s) return;
+  s[flag] = !s[flag];
+  if (flag === "signal_to_rec" && s.signal_to_rec) s.live = true;   // auto-rec implies live
+  await api("/api/strategies", { method: "PUT", body: JSON.stringify({ spec: s }) });
+  labShowFlags(s);
+}
+function labShowFlags(s) {
+  $("lab-flags").textContent = s ? `${s.live ? "⚡ live" : "not live"}${s.signal_to_rec ? " · 🎯 auto-rec" : ""}` : "";
+}
+$("lab-live").addEventListener("click", () => labToggleFlag("live"));
+$("lab-autorec").addEventListener("click", () => labToggleFlag("signal_to_rec"));
+$("lab-saved").addEventListener("change", async () => {
+  const list = await api("/api/strategies").catch(() => []);
+  labShowFlags(list.find((x) => x.name === $("lab-saved").value));
+});
 
 /* ---------- charts ---------- */
 let chart = null, candleSeries = null, volSeries = null, overlaySeries = [];

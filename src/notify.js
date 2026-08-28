@@ -15,6 +15,7 @@ const GATES = {
   scan: "scans", rec_new: "scans", rec_expired: "scans",
   briefing: "briefing",
   alert_rule: "custom_alerts",   // the notification-rules engine (digest hits never gate in)
+  strategy_signal: "custom_alerts",   // live strategy-screener signals
 };
 
 // Quiet hours: suppress webhook delivery in the configured window — EXCEPT stop_hit

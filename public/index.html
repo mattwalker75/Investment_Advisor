@@ -242,7 +242,10 @@
             <textarea id="lab-spec" style="width:100%;min-height:130px;font-family:monospace;font-size:.8rem"></textarea></details>
           <div class="frow"><label>Saved strategies</label><select id="lab-saved" style="min-width:160px"><option value="">—</option></select>
             <button id="lab-load" class="ghost small">Load</button>
-            <button id="lab-del" class="ghost small" title="Delete the selected saved strategy">✖</button></div>
+            <button id="lab-live" class="ghost small" title="Live: entry conditions screen the freshest bar every ~30 min and fire alerts">⚡ Live</button>
+            <button id="lab-autorec" class="ghost small" title="Auto-rec: each live signal also becomes a validated, shadow-tracked recommendation">🎯 Auto-rec</button>
+            <button id="lab-del" class="ghost small" title="Delete the selected saved strategy">✖</button>
+            <span class="hint" id="lab-flags"></span></div>
           <div id="lab-results"></div>
         </div>
       </div>

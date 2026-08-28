@@ -68,6 +68,16 @@ function start() {
     } catch (e) { console.error("[scheduler] health check failed:", e.message); }
   }, 5 * 60 * 1000));
 
+  // Live strategy signals: saved strategies flagged `live` act as screeners — entry
+  // conditions evaluated on the freshest bar every 30 min (candle fetches are cached,
+  // and the pass no-ops when no strategy is live).
+  timers.push(setInterval(async () => {
+    try {
+      const r = await require("./engine/strategylab").evaluateLiveSignals();
+      if (r.signals) console.log(`[scheduler] strategy signals: ${r.signals} fired across ${r.strategies} live strategies`);
+    } catch (e) { console.error("[scheduler] strategy signals failed:", e.message); }
+  }, 30 * 60 * 1000));
+
   // Notification rules: evaluate the user's "tell me when…" rules every 5 minutes.
   timers.push(setInterval(async () => {
     try {
