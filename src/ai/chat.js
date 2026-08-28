@@ -163,15 +163,17 @@ async function execTool(name, args = {}) {
     }
     case "get_options_chain": {
       const a = await resolveAsset(args.symbol, "stock");
+      if (!a) return { error: "symbol required" };
       const asCrypto = await resolveAsset(args.symbol);
       if (asCrypto && asCrypto.asset_type === "crypto") return { error: "options chains are stock-only — " + asCrypto.display + " is crypto (no listed options here)" };
       return (await yahoo.optionsChain(a.yahoo, s.preferences.options.max_dte)) || { error: "no options chain available" };
     }
     case "list_recommendations": {
-      const lim = Math.min(50, args.limit || 15);
+      // LIMIT inlined (clamped int): a bound `LIMIT ?` breaks mysql2's execute().
+      const lim = Math.min(50, Math.max(1, Number(args.limit) || 15));
       const rows = args.status
-        ? await db.all("SELECT * FROM recommendations WHERE status=? ORDER BY id DESC LIMIT ?", [args.status, lim])
-        : await db.all("SELECT * FROM recommendations ORDER BY id DESC LIMIT ?", [lim]);
+        ? await db.all(`SELECT * FROM recommendations WHERE status=? ORDER BY id DESC LIMIT ${lim}`, [args.status])
+        : await db.all(`SELECT * FROM recommendations ORDER BY id DESC LIMIT ${lim}`);
       return rows.map((r) => ({
         id: r.id, created: new Date(Number(r.created_at)).toISOString().slice(0, 10),
         symbol: r.symbol, asset_type: r.asset_type, side: r.side, status: r.status, taken: !!r.taken,
@@ -189,8 +191,11 @@ async function execTool(name, args = {}) {
       const rows = args.status
         ? await db.all("SELECT * FROM trades WHERE status=? ORDER BY id DESC LIMIT 50", [args.status])
         : await db.all("SELECT * FROM trades ORDER BY id DESC LIMIT 50");
-      const out = rows.map((t) => ({ ...t, targets: J(t.targets, []), exits: (J(t.exits, []) || []).filter((e) => !e.alert) }));
-      const open = out.filter((t) => t.status === "open");
+      const out = rows.map((t) => ({ ...t, targets: J(t.targets, []), exits: (J(t.exits, []) || []).filter((e) => !e.alert), option_details: J(t.option_details, null) }));
+      // Quote-based P&L applies to shares/coins only: an OPTION trade's entry_price is
+      // the premium per share — comparing it to the UNDERLYING's quote produced absurd
+      // percentages. Options are premium-priced in the Trades tab / health checks.
+      const open = out.filter((t) => t.status === "open" && t.asset_type !== "option");
       if (open.length) {
         const quotes = await yahoo.quotes([...new Set(open.map(yahooSym))]).catch(() => ({}));
         for (const t of open) {
@@ -200,6 +205,12 @@ async function execTool(name, args = {}) {
             const dir = t.side === "sell" ? -1 : 1;
             t.unrealized_pnl_pct = +(((q.price - t.entry_price) / t.entry_price) * 100 * dir).toFixed(2);
           }
+        }
+      }
+      for (const t of out) {
+        if (t.status === "open" && t.asset_type === "option") {
+          t.note = "option position — entry_price is the premium/share; live premium P&L is chain-priced in the Trades tab (use check_position_health for a verdict)";
+          if (t.option_details && t.option_details.expiry) t.days_to_expiry = Math.round((Date.parse(t.option_details.expiry) - Date.now()) / 86400000);
         }
       }
       return out;
@@ -226,6 +237,7 @@ async function execTool(name, args = {}) {
       const heads = await news.headlines(48, 60);
       if (args.symbol) {
         const a = await resolveAsset(args.symbol, args.asset_type);
+        if (!a) return { error: "symbol required" };
         // Match on both the ticker and the full name (matters for crypto: "BTC" + "Bitcoin").
         return news.matching(heads, a.display, a.name).map((h) => ({ title: h.title, source: h.source }));
       }

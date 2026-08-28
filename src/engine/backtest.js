@@ -139,6 +139,8 @@ async function backtestSymbol(symbol, cfg, opt) {
     if (exitPx != null) closeTrade(i, { avg: exitPx, pnl_pct: ((exitPx - pos.entry) / pos.entry) * 100, reason });
   }
 
+  // A position still open when candles run out is EXCLUDED from the stats (not force-
+  // closed) — a small survivorship bias, at most one unfinished trade per symbol.
   if (!trades.length) return { symbol, trades: 0 };
   const wins = trades.filter((t) => t.pnl_pct > 0);
   return {

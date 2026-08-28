@@ -120,10 +120,16 @@ router.post("/watchlist", async (req, res) => {
 });
 router.patch("/watchlist/:id", async (req, res) => {
   try {
+    const row = await db.get("SELECT * FROM watchlist WHERE id=?", [req.params.id]);
+    if (!row) return res.status(404).json({ error: "watchlist entry not found" });
     const b = req.body || {};
-    // Changing an alert level re-arms it (clears the fired marker).
+    // Partial update: only fields PRESENT in the body change — an alert-only edit must
+    // never erase the stored note. Changing a level re-arms its alert.
+    const above = b.alert_above !== undefined ? (b.alert_above ? Number(b.alert_above) : null) : row.alert_above;
+    const below = b.alert_below !== undefined ? (b.alert_below ? Number(b.alert_below) : null) : row.alert_below;
+    const note = b.note !== undefined ? (b.note || null) : row.note;
     await db.run("UPDATE watchlist SET alert_above=?, alert_below=?, note=?, alerts_fired=NULL WHERE id=?",
-      [b.alert_above ? Number(b.alert_above) : null, b.alert_below ? Number(b.alert_below) : null, b.note || null, req.params.id]);
+      [above, below, note, row.id]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -134,7 +140,9 @@ router.delete("/watchlist/:id", async (req, res) => {
 
 // ---------- Events feed ----------
 router.get("/events", async (req, res) => {
-  const rows = await db.all("SELECT * FROM events ORDER BY id DESC LIMIT ?", [Math.min(200, Number(req.query.limit) || 50)]);
+  // LIMIT is inlined (server-clamped int): a bound `LIMIT ?` breaks mysql2's execute().
+  const lim = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+  const rows = await db.all(`SELECT * FROM events ORDER BY id DESC LIMIT ${lim}`);
   res.json(rows);
 });
 

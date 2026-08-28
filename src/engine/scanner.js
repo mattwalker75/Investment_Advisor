@@ -111,14 +111,18 @@ async function runScan(trigger = "manual") {
   const log = [];
   const say = (m) => { log.push(`[${new Date().toISOString().slice(11, 19)}] ${m}`); console.log("[scan]", m); };
 
-  const ins = await db.run(
-    "INSERT INTO scan_runs (trigger_type, status, started_at) VALUES (?,?,?)",
-    [trigger, "running", now()]
-  );
-  const runId = ins.lastID;
-  running = { id: runId, started_at: now(), step: "starting" };
+  // Claim the single-flight slot SYNCHRONOUSLY (before any await): two near-simultaneous
+  // runScan() calls both passed the `if (running)` check during the INSERT await.
+  running = { id: null, started_at: now(), step: "starting" };
+  let runId = null;
 
   try {
+    const ins = await db.run(
+      "INSERT INTO scan_runs (trigger_type, status, started_at) VALUES (?,?,?)",
+      [trigger, "running", now()]
+    );
+    runId = ins.lastID;
+    running.id = runId;
     // 1. Universe
     running.step = "building universe";
     const universe = await buildUniverse(prefs);

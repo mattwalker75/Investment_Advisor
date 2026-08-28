@@ -4,6 +4,21 @@ All notable changes to Investment Advisor are tracked here.
 
 ## [Unreleased]
 
+### Fixed (re-analysis round)
+- 2026-08-28: Independent fresh-eyes review + author pass over the three shipped
+  batches; 9 issues fixed: chat `list_trades` computed absurd P&L for option positions
+  (underlying quote vs premium entry — now excluded with a note); watchlist alert edits
+  erased the stored note (PATCH is now a true partial update); the scan-status poll
+  destroyed the data-source indicator badge (~1.5s after load); `LIMIT ?` bound params
+  broke the MySQL backend on `/api/events` + chat `list_recommendations` (inlined,
+  clamped); missing null-guards in `get_options_chain`/`get_news`; "Send test"
+  persisted the candidate webhook URL before testing (now tests as an override — Save is
+  the only writer); the scan single-flight guard had an await gap allowing double scans;
+  backtest ladder trail-stops settled filled rungs at raw levels instead of actual
+  fills; the compact scan prompt dropped open interest (`l.oi` vs `open_interest`).
+  Hygiene: news symbol regex escaping (BRK.B), per-rec gap-backfill UPDATE delta, the
+  60s recs refresh preserves expanded cards.
+
 ### Added (batch 3)
 - 2026-08-28: **Automatic DB backups.** Daily SQLite snapshot into `data/backups/`
   (better-sqlite3 online backup — safe while writing), newest `backup_keep` retained

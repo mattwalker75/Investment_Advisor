@@ -103,11 +103,14 @@ function pollScan() {
         clearInterval(scanPoll);
         setScanUI(false);
         const last = st.last;
-        $("scan-sub").innerHTML = last
+        // NOTE: every rewrite must recreate BOTH badge spans (#db-badge, #src-badge) —
+        // loadProviderHealth() writes into #src-badge and would silently die without it.
+        $("scan-sub").innerHTML = (last
           ? (last.status === "done"
               ? `last scan: ${ago(last.finished_at)} · ${last.recs_count} rec(s) from ${last.universe_count} symbols · <span id="db-badge">${dbBadge}</span>`
-              : `last scan <span class="down">failed</span>: ${esc((last.error || "").slice(0, 80))}`)
-          : `AI market scanner · <span id="db-badge">${dbBadge}</span>`;
+              : `last scan <span class="down">failed</span>: ${esc((last.error || "").slice(0, 80))} · <span id="db-badge">${dbBadge}</span>`)
+          : `AI market scanner · <span id="db-badge">${dbBadge}</span>`) + '<span id="src-badge"></span>';
+        loadProviderHealth();   // repopulate the recreated badge
         loadRecs(); loadDashboard();
       }
     } catch (_) {}
@@ -230,7 +233,11 @@ async function loadRecs() {
     : all.filter((r) => ["open", "tracking"].includes(r.status));
   if (recsTypeFilter !== "all") list = list.filter((r) => tradeClass(r) === recsTypeFilter);
   $("recs-count").textContent = `${list.length} recommendation(s)`;
+  // Preserve expanded cards across re-renders (the 60s auto-refresh was collapsing
+  // whatever the user was reading).
+  const openIds = new Set([...document.querySelectorAll("#recs-list .rec.open")].map((e) => e.id));
   $("recs-list").innerHTML = list.map(recCard).join("") || '<div class="hint">Nothing here. Run a market scan to generate ideas.</div>';
+  openIds.forEach((id) => { const el = $(id); if (el) el.classList.add("open"); });
   list.forEach((r) => {
     const el = $("rec-" + r.id);
     el.querySelector(".rec-head").addEventListener("click", () => el.classList.toggle("open"));
@@ -1289,7 +1296,7 @@ async function loadSettings() {
     note("note-notif", "sending…");
     try {
       const r = await api("/api/notify/test", { method: "POST", body: JSON.stringify({ webhook_url: $("n-webhook").value }) });
-      note("note-notif", r.ok ? "✓ webhook delivered" : "✗ webhook failed — check the URL", r.ok);
+      note("note-notif", r.ok ? (r.note || "✓ webhook delivered") : "✗ webhook failed — check the URL (not saved)", r.ok);
       if ($("n-browser").checked && window.Notification) {
         if (Notification.permission === "default") await Notification.requestPermission();
         if (Notification.permission === "granted") new Notification("Investment Advisor", { body: "🔔 Browser notifications work." });

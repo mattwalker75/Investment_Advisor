@@ -78,10 +78,12 @@ async function headlines(maxAgeHours = 48, maxItems = 80) {
 
 // Headlines mentioning a symbol or company name (crude but effective matching).
 function matching(all, symbol, name) {
-  const sym = symbol.replace(/-USD$/, "");
+  // Escape regex metacharacters — symbols like BRK.B or ^GSPC would otherwise mis-match.
+  const reEsc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const sym = reEsc(symbol.replace(/-USD$/, ""));
   const symRe = new RegExp(`(^|[^A-Za-z])\\$?${sym}([^A-Za-z]|$)`, "i");
   const nameWord = (name || "").split(/\s+/)[0];
-  const nameRe = nameWord && nameWord.length >= 3 ? new RegExp(`\\b${nameWord}`, "i") : null;
+  const nameRe = nameWord && nameWord.length >= 3 ? new RegExp(`\\b${reEsc(nameWord)}`, "i") : null;
   return all.filter((h) => symRe.test(h.title) || (nameRe && nameRe.test(h.title))).slice(0, 6);
 }
 

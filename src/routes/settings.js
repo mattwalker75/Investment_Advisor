@@ -109,18 +109,15 @@ router.post("/db/backup", async (_req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Send a test notification through the configured webhook.
+// Send a test notification. A URL from the form is tested as an OVERRIDE — it is never
+// persisted here (a failed test used to leave the broken URL saved as the webhook).
 router.post("/notify/test", async (req, res) => {
   try {
     const { sendWebhook } = require("../notify");
     const url = (req.body && req.body.webhook_url) || undefined;
-    if (url && url !== "•••") {
-      // Test the URL from the form before it's saved.
-      const cur = (await settings.getAll()).notifications;
-      await settings.setBlock("notifications", { ...cur, webhook_url: url });
-    }
-    const ok = await sendWebhook("Investment Advisor", "🔔 Test notification — your webhook works.");
-    res.json({ ok });
+    const ok = await sendWebhook("Investment Advisor", "🔔 Test notification — your webhook works.",
+      { url: url && url !== "•••" ? url : undefined });
+    res.json({ ok, note: ok && url && url !== "•••" ? "URL works — click Save to keep it." : undefined });
   } catch (e) { res.status(502).json({ ok: false, error: e.message }); }
 });
 

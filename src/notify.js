@@ -28,9 +28,11 @@ const NTFY_PRIORITY = {
 };
 const NTFY_TAGS = { stop_hit: "rotating_light", target_hit: "dart", health: "stethoscope", briefing: "newspaper", rec_new: "bulb" };
 
-async function sendWebhook(title, message, { type } = {}) {
+// opts.url overrides the stored webhook — used by the settings "Send test" so a
+// candidate URL can be tested WITHOUT being persisted first.
+async function sendWebhook(title, message, { type, url: urlOverride } = {}) {
   const cfg = settings.getSync().notifications || {};
-  const url = (cfg.webhook_url || "").trim();
+  const url = (urlOverride || cfg.webhook_url || "").trim();
   if (!url) return false;
   // SSRF guard: only http(s), never loopback/link-local/metadata destinations (private
   // LAN hosts like a self-hosted ntfy stay allowed). Throws with the reason — the

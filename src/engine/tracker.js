@@ -64,6 +64,7 @@ async function backfillGaps() {
 
   // Recommendations: run the same state machine bar-by-bar.
   for (const r of recs) {
+    const eventsBefore = events;   // per-rec delta: only changed recs get an UPDATE
     const bars = barsBySym[yahooSym(r)];
     if (!bars || !bars.length) continue;
     const targets = J(r.targets, []);
@@ -107,7 +108,7 @@ async function backfillGaps() {
         break;
       }
     }
-    if (status !== r.status || events) await db.run("UPDATE recommendations SET status=?, outcome=? WHERE id=?", [status, JSON.stringify(outcome), r.id]);
+    if (status !== r.status || events > eventsBefore) await db.run("UPDATE recommendations SET status=?, outcome=? WHERE id=?", [status, JSON.stringify(outcome), r.id]);
   }
 
   // Taken trades: fire the alerts that would have fired (closing stays the user's call).
