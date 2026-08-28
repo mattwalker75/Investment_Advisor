@@ -82,12 +82,14 @@ async function loadProviderHealth() {
 let scanPoll = null;
 function setScanUI(running) {
   $("scan-btn").disabled = running;
+  $("scan-1h-btn").disabled = running;
   const d = $("dash-scan-link");
   if (d) { d.disabled = running; d.textContent = running ? "⏳ Scanning…" : "Scan now"; }
 }
-$("scan-btn").addEventListener("click", startScan);
-async function startScan() {
-  try { await api("/api/scan", { method: "POST" }); } catch (e) { alert(e.message); return; }
+$("scan-btn").addEventListener("click", () => startScan());
+$("scan-1h-btn").addEventListener("click", () => startScan("intraday"));
+async function startScan(mode) {
+  try { await api("/api/scan", { method: "POST", body: JSON.stringify(mode ? { mode } : {}) }); } catch (e) { alert(e.message); return; }
   setScanUI(true);
   pollScan();
 }
@@ -375,6 +377,7 @@ function recCard(r) {
       ${assetBadge(r)}
       <span class="hint">${esc(r.name || "")}${r.sector ? " · " + esc(r.sector) : ""}</span>
       <span class="chipstat" title="where this idea came from">${r.source === "chat" ? "💬 chat" : "🔍 scan"}</span>
+      ${r.timeframe === "1h" ? '<span class="chipstat" title="from an intraday scan: hourly bars, 1-5 day horizon, expires in 2 days">⚡ intraday</span>' : ""}
       ${(r.outcome && r.outcome.revalidation) ? `<span class="chipstat ${r.outcome.revalidation.verdict === "valid" ? "tracking" : ""}" title="${esc(r.outcome.revalidation.note || "")}">♻ ${esc(r.outcome.revalidation.verdict)} · ${ago(r.outcome.revalidation.at)}</span>` : ""}
       ${earn && earn.days_away <= (r.horizon_max_days || 30) ? `<span class="chipstat" style="color:var(--amber)" title="earnings ${esc(earn.date)}">⚠ earnings ${earn.days_away}d</span>` : ""}
       <span class="side ${r.side}">${r.side.toUpperCase()}</span>

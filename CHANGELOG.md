@@ -14,6 +14,15 @@ All notable changes to Investment Advisor are tracked here.
   trade plan only if warranted, and confidence with what-would-change-my-mind. Notes
   land in a browsable library (last 15, 🗂 to open without generating;
   `POST/GET/DELETE /api/research`). Slow by design; research, not advice.
+- 2026-08-28: **Intraday scan mode.** ⚡ 1h next to Scan market (API:
+  `POST /api/scan {mode:"intraday"}`) scans on HOURLY bars for 1-5 day setups: the
+  recommender gets an explicit intraday contract (tight zones, days-not-weeks
+  horizons, fewer/zero ideas on a quiet tape), recs are tagged ⚡ intraday
+  (`inputs.timeframe="1h"`) and expire in 2 days instead of `rec_expiry_days`. The
+  options pass, fundamentals, and the SPY relative-strength benchmark are skipped
+  (daily-native). Honest limits stated up front: free hourly data covers ~2-3 months,
+  no pre-market. First scanner integration test (stubbed providers + scripted model)
+  proves the mode end-to-end. 99 tests, all green.
 
 ### Added (batch 8)
 - 2026-08-28: **Fundamentals layer.** Every shortlisted stock candidate now carries a

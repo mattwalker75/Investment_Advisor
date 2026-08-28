@@ -10,10 +10,12 @@ const { J } = require("../util");
 const router = express.Router();
 
 // ---------- Scanning ----------
+// body {mode:"intraday"} runs on hourly bars (1-5 day setups); default is the daily scan.
 router.post("/scan", (req, res) => {
   if (scanner.status().running) return res.status(409).json({ error: "a scan is already running" });
-  scanner.runScan("manual").catch(() => {});    // runs in background; UI polls status
-  res.json({ started: true });
+  const intraday = (req.body && req.body.mode) === "intraday";
+  scanner.runScan(intraday ? "intraday" : "manual", intraday ? { timeframe: "1h" } : {}).catch(() => {});  // runs in background; UI polls status
+  res.json({ started: true, mode: intraday ? "intraday" : "daily" });
 });
 router.get("/scan/status", async (_req, res) => {
   const st = scanner.status();

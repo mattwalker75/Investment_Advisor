@@ -5,7 +5,7 @@ Local-only Express API (`127.0.0.1:8210`), no auth (single-user tool). All bodie
 ## Scanning
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /api/scan` | Start a market scan (background; 409 if one is running). |
+| `POST /api/scan` | Start a market scan (background; 409 if one is running). Body `{mode:"intraday"}` runs on hourly bars — 1-5 day setups, 2-day rec expiry; options/fundamentals passes and the SPY benchmark are skipped (daily-native). Honest limits: free hourly data covers ~2-3 months, no pre-market. |
 | `GET /api/scan/status` | `{running, step?}` + the last run summary/log. |
 | `GET /api/runs` | Recent scan runs. |
 

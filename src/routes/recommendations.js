@@ -19,6 +19,7 @@ const rowRec = (r) => {
     earnings: (inp && inp.candidate && inp.candidate.next_earnings) || null,
     signals: (inp && inp.candidate && inp.candidate.indicators && inp.candidate.indicators.signals) || [],
     source: inp && inp.source === "advisor_chat" ? "chat" : "scan",
+    timeframe: (inp && inp.timeframe) || null,     // "1h" marks intraday-scan ideas
     inputs: undefined,
   };
 };

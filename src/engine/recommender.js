@@ -81,6 +81,7 @@ ${SCHEMA_EXAMPLE}`;
 function compactMarket(m) {
   return {
     as_of: m.as_of,
+    scan_mode: m.scan_mode,
     regime: m.regime ? { regime: m.regime.regime, spy_vs_200dma_pct: m.regime.spy_vs_200dma_pct, note: m.regime.note } : undefined,
     active_recommendations: (m.active_recommendations || []).map((r) => ({ symbol: r.symbol, side: r.side, entry: [r.entry_low, r.entry_high], status: r.status })),
     sentiment: m.sentiment,
@@ -285,11 +286,16 @@ async function calibrationSummary() {
 // Batching (Settings → AI → Scan batching): 'single' = one call for the whole
 // shortlist; 'grouped' = ~4 candidates per call; 'per_candidate' = one each. Smaller
 // batches trade cost/latency for rigor: no cross-candidate bleed, no truncation risk.
-async function recommend(context, onProgress = () => {}) {
+async function recommend(context, onProgress = () => {}, { intraday = false } = {}) {
   const s = settings.getSync();
   const prefs = s.preferences;
   const calib = await calibrationSummary().catch(() => null);
-  const sys = systemPrompt(prefs) + (calib ? `\n\n${calib}` : "");
+  // Intraday mode: same contract, but the indicators were computed on HOURLY bars and
+  // the ideas must live on a matching clock — tighter structures, days not weeks.
+  const intradayBlock = intraday ? `
+
+INTRADAY MODE: every candidate's indicators were computed on HOURLY bars over roughly the last two weeks (free hourly data covers only ~2-3 months and no pre-market). These are SHORT-TERM setups: horizon_min_days/horizon_max_days MUST be between 1 and 5, entry zones and stops tight relative to recent hourly ranges, and the thesis is momentum or mean-reversion over the next few sessions — not a swing/position call. Only recommend a setup that genuinely works on this clock; fewer or zero ideas is the right answer for a quiet tape.` : "";
+  const sys = systemPrompt(prefs) + intradayBlock + (calib ? `\n\n${calib}` : "");
   const marketC = compactMarket(context.market);
   const candsC = context.candidates.map(compactCandidate);
   const mode = s.ai.scan_batching || "single";

@@ -104,8 +104,14 @@ function setupScore(latest) {
   return score;
 }
 
-async function runScan(trigger = "manual") {
+// timeframe "1d" (default) or "1h" (intraday mode: hourly bars, 1-5 day setups).
+// Intraday inherits the honest free-data limits — ~2-3 months of hourly history, no
+// pre-market — and skips the options pass, fundamentals, and the SPY relative-strength
+// benchmark (all daily-native context). Intraday recs expire in 2 days, not the
+// configured rec_expiry_days.
+async function runScan(trigger = "manual", { timeframe = "1d" } = {}) {
   if (running) throw new Error("a scan is already running");
+  const intraday = timeframe === "1h";
   const s = settings.getSync();
   const prefs = s.preferences;
   const log = [];
@@ -127,15 +133,20 @@ async function runScan(trigger = "manual") {
     running.step = "building universe";
     const universe = await buildUniverse(prefs);
     if (!universe.length) throw new Error("scan universe is empty — check Preferences");
-    say(`universe: ${universe.length} symbols (stocks:${universe.filter(u => u.asset_type === "stock").length}, crypto:${universe.filter(u => u.asset_type === "crypto").length})`);
+    say(`universe: ${universe.length} symbols (stocks:${universe.filter(u => u.asset_type === "stock").length}, crypto:${universe.filter(u => u.asset_type === "crypto").length})${intraday ? " — INTRADAY mode (hourly bars)" : ""}`);
 
-    // 2. History + indicators (SPY closes fetched once as the relative-strength benchmark)
+    // 2. History + indicators (SPY closes fetched once as the relative-strength benchmark;
+    // skipped in intraday mode — 63-day relative strength means nothing on 2 weeks of hourly bars)
     running.step = `fetching history for ${universe.length} symbols`;
-    const benchCloses = await yahoo.history("SPY", 365).then((c) => c.map((b) => b.close)).catch(() => null);
+    const benchCloses = intraday ? null : await yahoo.history("SPY", 365).then((c) => c.map((b) => b.close)).catch(() => null);
     const enriched = (await pool(universe, 4, async (u) => {
-      const candles = await yahoo.history(u.symbol, 365);
+      // Intraday: hourly candles — 12 days for crypto (Coinbase's cap, 24/7 so ~288 bars),
+      // 20 calendar days for stocks (~13 sessions × 6.5h ≈ 85 bars). Daily: 1y as ever.
+      const candles = intraday
+        ? await yahoo.history(u.symbol, u.asset_type === "crypto" ? 12 : 20, "1h")
+        : await yahoo.history(u.symbol, 365);
       if (!candles || candles.length < 60) return null;    // not enough data to analyze
-      const { latest } = indicators.computeAllCached(`scan:${u.symbol}`, candles, s.indicators, benchCloses ? { benchCloses } : {});
+      const { latest } = indicators.computeAllCached(`scan${intraday ? "1h" : ""}:${u.symbol}`, candles, s.indicators, benchCloses ? { benchCloses } : {});
       const q = await yahoo.quote(u.symbol).catch(() => null);
       return {
         ...u,
@@ -172,10 +183,12 @@ async function runScan(trigger = "manual") {
       if (c.asset_type === "stock") {
         // Binary-event risk: the AI must know if earnings land inside the trade horizon.
         cand.next_earnings = await yahoo.nextEarnings(c.symbol).catch(() => null);
-        if (prefs.options.enabled) cand.options_chain = await yahoo.optionsChain(c.symbol, prefs.options.max_dte).catch(() => null);
-        // Valuation/quality context (24h-cached; note-only without an FMP key).
-        const f = await require("../providers/fundamentals").fundamentals(c.symbol).catch(() => null);
-        if (f && !f.note) cand.fundamentals = f;
+        if (!intraday) {
+          if (prefs.options.enabled) cand.options_chain = await yahoo.optionsChain(c.symbol, prefs.options.max_dte).catch(() => null);
+          // Valuation/quality context (24h-cached; note-only without an FMP key).
+          const f = await require("../providers/fundamentals").fundamentals(c.symbol).catch(() => null);
+          if (f && !f.note) cand.fundamentals = f;
+        }
       }
       return cand;
     });
@@ -198,12 +211,13 @@ async function runScan(trigger = "manual") {
       },
       candidates: candidates.filter(Boolean),
     };
-    const { recs, market_outlook, model } = await recommender.recommend(context, say);
+    if (intraday) context.market.scan_mode = "intraday";
+    const { recs, market_outlook, model } = await recommender.recommend(context, say, { intraday });
     say(`model ${model} returned ${recs.length} validated recommendation(s)`);
 
     // 6. Persist
     running.step = "saving";
-    const expiryMs = (s.schedule.rec_expiry_days || 10) * 86400000;
+    const expiryMs = intraday ? 2 * 86400000 : (s.schedule.rec_expiry_days || 10) * 86400000;
     let skippedDupes = 0;
     for (const r of recs) {
       const dup = await recommender.duplicateOf(r);
@@ -218,18 +232,18 @@ async function runScan(trigger = "manual") {
         [runId, now(), r.asset_type, r.symbol, r.name, r.side, r.current_price, r.entry_low, r.entry_high,
          r.stop_loss, JSON.stringify(r.targets), r.horizon_min_days, r.horizon_max_days, r.confidence,
          r.risk_reward, r.rationale, r.options_play ? JSON.stringify(r.options_play) : null,
-         JSON.stringify({ candidate: cand, market: context.market, market_outlook }),
+         JSON.stringify({ candidate: cand, market: context.market, market_outlook, ...(intraday ? { timeframe: "1h" } : {}) }),
          "open", now() + expiryMs]
       );
       await logEvent("rec_new", "recommendation", res.lastID, r.symbol,
-        `New ${r.side.toUpperCase()} idea: ${r.symbol} @ ${r.entry_low}-${r.entry_high} (conf ${Math.round(r.confidence * 100)}%)`);
+        `New ${intraday ? "INTRADAY " : ""}${r.side.toUpperCase()} idea: ${r.symbol} @ ${r.entry_low}-${r.entry_high} (conf ${Math.round(r.confidence * 100)}%)`);
     }
 
     // 6b. OPTIONS pass: standalone option plays over the chain-bearing candidates,
     // premium-denominated and shadow-tracked like any other rec. Failure never kills
     // the scan — stock/crypto recs above are already persisted.
     let optSaved = 0;
-    if (prefs.options.enabled && prefs.asset_classes.stocks) {
+    if (!intraday && prefs.options.enabled && prefs.asset_classes.stocks) {
       const optionsEngine = require("./options");
       running.step = "options analysis";
       try {
