@@ -106,7 +106,9 @@ async function backtestSymbol(symbol, cfg, opt) {
       const stopPx = fillStop(c, pos.stop);
       if (stopPx != null) {
         const pctLeft = 100 - pos.filled.reduce((s, f) => s + f.sell_pct, 0);
-        const fills = [...pos.filled, { price: sell(stopPx), sell_pct: pctLeft }];
+        // Already-filled rungs settle at their ACTUAL fill (r.fill: gap/slippage-adjusted),
+        // never the raw rung level.
+        const fills = [...pos.filled.map((r) => ({ price: r.fill, sell_pct: r.sell_pct })), { price: sell(stopPx), sell_pct: pctLeft }];
         finishLadder(i, fills, pos, closeTrade, pos.filled.length ? "trail_stop" : "stop");
         continue;
       }

@@ -97,7 +97,7 @@ function compactCandidate(c) {
     const near = (legs) => (legs || [])
       .slice().sort((a, b) => Math.abs(a.strike - c.price) - Math.abs(b.strike - c.price)).slice(0, 8)
       .sort((a, b) => a.strike - b.strike)
-      .map((l) => ({ strike: l.strike, bid: l.bid, ask: l.ask, iv: l.iv, oi: l.oi }));
+      .map((l) => ({ strike: l.strike, bid: l.bid, ask: l.ask, iv: l.iv, oi: l.open_interest }));
     out.options_chain = { expiry: c.options_chain.expiry, calls: near(c.options_chain.calls), puts: near(c.options_chain.puts) };
   }
   return out;
