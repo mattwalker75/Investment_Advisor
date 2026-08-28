@@ -47,6 +47,11 @@ test("projectionCone: bands are ordered, ascending in time, and WIDEN with the h
   const short = await predict.projectionCone("TEST", "1w");
   assert.ok(cone.band_width_pct > short.band_width_pct, "3m wider than 1w");
   assert.match(cone.note, /not a directional forecast/i);
+  // axis honesty (regression): a 1-week cone's x-extent must be ~1 week, not stretched
+  assert.strictEqual(short.bands.p50.length, 5, "1w = 5 daily steps");
+  const lastCandle = Date.parse(daily[daily.length - 1].time);
+  const lastPoint = Date.parse(short.bands.p50[4].time);
+  assert.ok((lastPoint - lastCandle) / 86400000 <= 10, "1w cone must end within ~10 calendar days");
 });
 
 test("projectionCone: intraday horizon falls back to daily-scaled vol when hourly is unavailable", async () => {

@@ -45,6 +45,9 @@ const quantilePrice = (S, drift, sigma, tYears, z) =>
 
 // Future time axis: daily horizons → calendar-date strings (weekends skipped),
 // intraday → epoch seconds — matching what the chart's current interval uses.
+// Each step k is placed at its ACTUAL trading-day offset round(horizonDays·k/steps), so
+// the drawn cone's x-extent equals the horizon (a fixed per-step stride overshot short
+// horizons — a 1-week cone stretched across 24 trading days).
 function futureTimes(lastTime, steps, horizonDays, timeframe) {
   const out = [];
   if (timeframe === "1h") {
@@ -54,17 +57,15 @@ function futureTimes(lastTime, steps, horizonDays, timeframe) {
     return out;
   }
   let d = new Date(typeof lastTime === "number" ? lastTime * 1000 : Date.parse(lastTime + "T00:00:00Z"));
-  const perStep = Math.max(1, Math.round(horizonDays / steps));
-  let added = 0;
-  while (added < steps) {
-    let tradingDays = 0;
-    while (tradingDays < perStep) {
+  let tradingDays = 0;
+  for (let k = 1; k <= steps; k++) {
+    const target = Math.max(k === 1 ? 1 : tradingDays + 1, Math.round((horizonDays * k) / steps));
+    while (tradingDays < target) {
       d = new Date(d.getTime() + 86400000);
       const dow = d.getUTCDay();
       if (dow !== 0 && dow !== 6) tradingDays++;
     }
     out.push(d.toISOString().slice(0, 10));
-    added++;
   }
   return out;
 }
@@ -90,12 +91,14 @@ async function projectionCone(symbol, horizon, { interval = "1d" } = {}) {
   const params = estimateParams(closes, perYear);
   if (!params) throw new Error("not enough history to estimate volatility for " + symbol);
 
-  const steps = 24;
+  // Step count adapts to the horizon on daily axes (≤1 point per trading day, so a
+  // 1-week cone gets 5 points across 5 days — never a stretched axis).
+  const steps = interval === "1h" ? 24 : Math.min(24, Math.max(3, Math.round(h.days) || 3));
   const times = futureTimes(candles[candles.length - 1].time, steps, h.days, interval);
   const bands = {};
   for (const [q, z] of Object.entries(QUANTILES)) {
     bands[q] = times.map((time, k) => {
-      const tYears = (h.days * ((k + 1) / steps)) / 252;
+      const tYears = (h.days * ((k + 1) / times.length)) / 252;
       return { time, value: +quantilePrice(S, params.drift, params.sigma, tYears, z).toFixed(S >= 100 ? 2 : 4) };
     });
   }

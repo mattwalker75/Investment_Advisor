@@ -232,7 +232,12 @@ async function evaluateRules() {
       }
     } catch (_) { /* a rule that can't evaluate waits for the next pass */ }
   }
-  await saveRules(rules.concat((await listRules()).filter((r) => r.enabled === false)));   // persist state/cooldowns
+  // Persist state/cooldowns by MERGING into the current list (re-read): a rule the user
+  // added, removed, or toggled while this pass ran must survive — only evaluation state
+  // is written back, keyed by id.
+  const evaluated = new Map(rules.map((r) => [r.id, r]));
+  const current = await listRules();
+  await saveRules(current.map((r) => (evaluated.has(r.id) ? { ...r, state: evaluated.get(r.id).state } : r)));
   return { evaluated: rules.length, fired };
 }
 
