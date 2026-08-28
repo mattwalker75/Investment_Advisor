@@ -48,6 +48,10 @@ Local-only Express API (`127.0.0.1:8210`), no auth (single-user tool). All bodie
 | --- | --- |
 | `POST /api/recommendations/:id/revalidate` | AI re-checks an open rec against current data → valid / adjust / withdraw. |
 | `GET /api/briefing` · `POST /api/briefing` | Latest daily AI briefing / generate one now. |
+| `POST /api/strategy/compile` | Plain-English strategy → validated spec (`{description}` → `{spec, notes}`); the spec is what actually runs — show it to the user. |
+| `POST /api/strategy/run` | Run a strategy spec through the direction-aware simulator (long/short, options model-priced, crypto); `?critique=1` adds the AI feedback. Full metrics + walk-forward. |
+| `GET/PUT/DELETE /api/strategies` | Saved, named, re-runnable strategies (PUT body `{spec}`; DELETE by `/:name`). |
+| `GET /api/predict/:symbol` | Projection cone: `?horizon=1h..1y&interval=1d|1h` → quantile bands (p10–p90) from EWMA realized volatility, shaped for the chart axis, plus `at_horizon` endpoints and honest params/notes. |
 | `POST /api/backtest` | Simulate your indicator thresholds over the past year: `{symbols?, min_signals?, exit_model? ('bracket'\|'ladder_trail'), slippage_pct?, fee_pct?, oos_split_pct?}`. Gap-aware fills; response includes portfolio metrics (`overall`: win rate, expectancy, profit factor, max drawdown) and an in-sample vs out-of-sample `walk_forward` split. |
 | `GET /api/portfolio/concentration` | Sector/asset concentration warnings for open positions. |
 | `GET /api/portfolio/equity` | Equity curves: realized closed-trade account curve + the what-if-every-rec-was-taken paper curve (risk-sized, sequential, no leverage), each with return/max-drawdown stats. |

@@ -31,6 +31,8 @@ which tools it consulted. Conversation persists in the browser (🗑 clears it).
 | `update_trade` | Updates an open trade's stop/targets plan — **always confirms the exact levels with you first**. |
 | `get_economic_calendar` | High-impact US macro events (FOMC, CPI, jobs…) for the coming days (needs the free FMP key). |
 | `suggest_options_play` | Designs ONE options play within your allowed strategies, validated against the live chain (real strikes, premium from bid/ask mids, breakeven, max loss, IV); `save:true` tracks it as a premium-based shadow recommendation. |
+| `run_strategy` | Tests YOUR strategy: plain English → compiled spec (always shown back) → full simulation (long/short, options model-priced, crypto) → metrics + the advisor's own critique. `save_as` keeps it. |
+| `get_prediction` | Projection cone at a horizon (1h→1y): the statistically likely price range from realized volatility, bands widening with time. The advisor adds its directional lean WITH confidence — never as certainty. |
 | `manage_memory` | Durable notes that persist across conversations (see below). |
 
 ## Slash commands

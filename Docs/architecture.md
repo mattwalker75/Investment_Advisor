@@ -44,6 +44,8 @@ src/
     ├── health.js              AI position health checks (hold/tighten/partial/sell verdicts)
     ├── briefing.js            daily AI morning briefing
     ├── options.js             first-class options recs: premium pricing, gauntlet, settlement
+    ├── strategylab.js         user-defined strategies: spec + simulator + AI compile/critique
+    ├── predict.js             projection cone (lognormal quantiles from EWMA realized vol)
     └── backtest.js            threshold backtester (gap-aware fills, ladder+trail model, walk-forward)
 public/                        dark terminal UI (vanilla JS + lightweight-charts)
 test/                          unit suite (node --test; network-free) — run via ./UNIT_TEST.sh

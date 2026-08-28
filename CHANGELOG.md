@@ -4,6 +4,27 @@ All notable changes to Investment Advisor are tracked here.
 
 ## [Unreleased]
 
+### Added (batch 5)
+- 2026-08-28: **Strategy Lab.** Describe YOUR strategy in plain English; the AI compiles
+  it to a strict, whitelisted spec (always shown back — nothing hidden), a direction-
+  aware simulator runs it on the backtester honesty rules (gap-aware fills long AND
+  short, slippage, ATR/pct stops, R-multiple ladders, breakeven + ATR trail,
+  walk-forward split, full metrics), and the AI writes a blunt critique (verdict
+  grounded in expectancy/PF/drawdown/sample size, what works vs hurts, curve-fit
+  warning, concrete changes to try). Universes: symbol lists, your stock prefs, or
+  crypto; timeframes daily (~5y) or hourly (labeled ~2-3-month sample). Options are
+  supported honestly: long calls/puts MODEL-PRICED via Black-Scholes from realized
+  volatility with an explicit label (no free historical chains exist). Saved/named/
+  re-runnable strategies; Performance-tab card; `run_strategy` chat tool; API under
+  `/api/strategy*`.
+- 2026-08-28: **Projection cone (predictive analysis).** `GET /api/predict/:symbol` +
+  a 🔮 picker on the chart: quantile bands (p10/25/50/75/90) from EWMA realized
+  volatility drawn beyond the last candle, horizons 1h→1y, ranges that WIDEN with time
+  by construction; drift is shrunk hard toward zero so no heroic trend is baked in.
+  Every response says what it is — a probability range, not a directional forecast.
+  `get_prediction` chat tool: the advisor states its lean WITH confidence and must cite
+  the band width. 12 new unit tests (71 total).
+
 ### Added (batch 4)
 - 2026-08-28: **Unit-test suite + `UNIT_TEST.sh`.** 59 network-free tests on Node's
   built-in runner (zero new dependencies): the validateRec money-safety gauntlet, the
