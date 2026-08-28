@@ -4,6 +4,36 @@ All notable changes to Investment Advisor are tracked here.
 
 ## [Unreleased]
 
+### Added (batch 7)
+- 2026-08-28: **AI live self-test.** One click in Settings → AI proves every AI pipeline
+  against the configured model in miniature — endpoint round-trip, strict-JSON contract,
+  the tool-calling loop, the real scan prompt + validation gauntlet on a fixed synthetic
+  candidate, the options pass, and a strategy compile — per-check pass/fail with the
+  exact failure text. Nothing persisted; fixed fixtures, no market-data calls.
+- 2026-08-28: **Live strategy signals.** Saved Lab strategies flagged ⚡ live act as
+  screeners: entry conditions evaluated on the freshest bar every ~30 min,
+  EDGE-TRIGGERED (fire on becoming true, quiet while true, re-arm on false). 🎯 auto-rec
+  additionally turns each signal into a validated, shadow-tracked recommendation
+  (mechanical levels from the spec's exit model, same gauntlet + duplicate guard,
+  honestly labeled "your rules, executed").
+- 2026-08-28: **Portfolio risk panel.** Trades-tab tiles: total $ at risk if every stop
+  hits, % of account, biggest single risk, NO-STOP positions flagged loudly (full value
+  counted; long options cap at premium). `get_portfolio_risk` chat tool + a "Review my
+  risk" dashboard chip.
+- 2026-08-28: **Performance attribution.** Outcomes split by source (scan / chat /
+  options scan / your strategies), by market regime at entry, and by asset class, plus
+  calibration drift (early vs late half) and realized trade dollars — a Performance
+  card answering "where does the edge actually come from?".
+- 2026-08-28: **Headline-watch alert rule.** `headline_mention` (a symbol / your
+  positions / your watchlist) with per-headline dedupe and a long default cooldown.
+- 2026-08-28: **Backup restore + integrity.** Settings → Database lists backups with a
+  SQLite integrity check each; verified one-click restore with an automatic pre-restore
+  snapshot (test-caught fix: backup stamps now carry milliseconds so a same-second
+  snapshot can't overwrite the backup being restored).
+- 2026-08-28: **Weekly AI review.** A candid retrospective — the week's recommendations
+  with real numbers, your trades, system health, and 1-2 concrete what-I'd-change
+  suggestions; 🗓 button on the briefing card and schedulable on a chosen day. 90 tests.
+
 ### Fixed (re-analysis round 3)
 - 2026-08-28: Independent fresh-eyes review of the batch 4–6 code; 12 issues fixed. The
   big three shared one root — consumers assuming underlying-denominated levels on

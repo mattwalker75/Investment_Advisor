@@ -48,6 +48,11 @@ Local-only Express API (`127.0.0.1:8210`), no auth (single-user tool). All bodie
 | --- | --- |
 | `POST /api/recommendations/:id/revalidate` | AI re-checks an open rec against current data → valid / adjust / withdraw. |
 | `GET /api/briefing` · `POST /api/briefing` | Latest daily AI briefing / generate one now. |
+| `POST /api/ai/selftest` | AI live self-test: proves each pipeline (JSON contract, tool calling, scan gauntlet, options pass, strategy compile) against the configured model in miniature; per-check pass/fail with failure text. |
+| `GET /api/portfolio/risk` | Risk panel: total $ lost if every stop hits, no-stop flags, biggest single risk, per-position rows. |
+| `GET /api/performance/attribution` | Outcomes split by source (scan/chat/options/your strategies), regime at entry, asset class; calibration drift; realized trade dollars. |
+| `GET/POST /api/review/weekly` | The weekly AI review (latest / generate): a candid retrospective with what-I'd-change suggestions. |
+| `GET /api/db/backups` · `POST /api/db/restore` | List backups (`?verify=1` integrity-checks each) / verified restore with an automatic pre-restore snapshot. |
 | `GET/PUT /api/alerts` | Notification rules ("tell me when…"): list with labels / replace the set (state and cooldowns preserved by id). Evaluated every ~5 min; per-rule delivery `instant` or `digest` (folded into the daily briefing). |
 | `GET /api/figures` · `POST /api/figures/follow` | Congressional trades: most-active politicians + latest filings (`?name=` filters to one person, option plays parsed from descriptions); follow/unfollow creates a `figure_filing` alert rule. |
 | `GET /api/insiders/:symbol` | SEC Form 4 insider filings for a stock (FMP; degrades to a note on free-tier limits). |
