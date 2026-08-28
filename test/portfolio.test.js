@@ -6,9 +6,11 @@ const { useTempDb, stubModule } = require("./helpers");
 
 useTempDb();
 // portfolio.js binds the yahoo module at load time — stub BEFORE anything requires it.
+const priceSeries = {};   // sym -> candles (for the correlation tests)
 stubModule("providers/yahoo.js", {
   quotes: async (syms) => Object.fromEntries(syms.map((s) => [s, { price: 100 }])),
   sector: async () => ({ sector: null }),
+  history: async (sym) => priceSeries[sym] || [],
 });
 const db = require("../src/db");
 const settings = require("../src/settings");
@@ -53,6 +55,36 @@ test("riskPanel: stop-distance risk, no-stop flagged at full value, long options
   assert.strictEqual(r.total_risk, 1250);
   assert.ok(r.warnings.some((w) => /RISK2.*NO STOP/.test(w)));
   await db.run("DELETE FROM trades WHERE symbol LIKE 'RISK%'");
+});
+
+test("pearson + effectiveBets: known values", () => {
+  const { pearson, effectiveBets } = require("../src/engine/portfolio");
+  const a = Array.from({ length: 60 }, (_, i) => Math.sin(i / 3) + i * 0.01);
+  assert.ok(Math.abs(pearson(a, a) - 1) < 1e-9, "self-correlation = 1");
+  assert.ok(Math.abs(pearson(a, a.map((x) => -x)) + 1) < 1e-9, "inverse = -1");
+  const I = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  assert.ok(Math.abs(effectiveBets([1, 1, 1], I) - 3) < 1e-9, "3 uncorrelated equal bets = 3");
+  const ONES = [[1, 1, 1], [1, 1, 1], [1, 1, 1]];
+  assert.ok(Math.abs(effectiveBets([1, 1, 1], ONES) - 1) < 1e-9, "perfectly correlated = 1 bet");
+});
+
+test("correlation(): identical movers collapse toward one effective position", async () => {
+  const mk = (seed) => Array.from({ length: 120 }, (_, i) => {
+    const px = 100 + Math.sin((i + seed) / 4) * 8 + i * 0.05;
+    return { time: new Date(Date.UTC(2026, 0, 1) + i * 86400000).toISOString().slice(0, 10), open: px, high: px + 1, low: px - 1, close: px, volume: 1 };
+  });
+  priceSeries.CORR1 = mk(0);
+  priceSeries.CORR2 = mk(0);          // identical → ρ 1
+  const now = Date.now();
+  await db.run("INSERT INTO trades (rec_id,created_at,asset_type,symbol,side,qty,entry_price,entry_at,stop_loss,targets,status) VALUES (NULL,?,'stock','CORR1','buy',10,100,?,95,'[]','open')", [now, now]);
+  await db.run("INSERT INTO trades (rec_id,created_at,asset_type,symbol,side,qty,entry_price,entry_at,stop_loss,targets,status) VALUES (NULL,?,'stock','CORR2','buy',10,100,?,95,'[]','open')", [now, now]);
+  const corr = await require("../src/engine/portfolio").correlation();
+  assert.ok(corr, "correlation computed");
+  assert.ok(corr.effective_positions <= 1.1, "two identical movers ≈ 1 bet, got " + corr.effective_positions);
+  assert.ok(corr.high_pairs.length === 1 && corr.high_pairs[0].rho >= 0.99);
+  const risk = await require("../src/engine/portfolio").riskPanel();
+  assert.ok(risk.warnings.some((w) => /CORR1 & CORR2 move together/.test(w)), "risk panel surfaces the pair");
+  await db.run("DELETE FROM trades WHERE symbol LIKE 'CORR%'");
 });
 
 test("equityCurves: what-if sizes by risk distance, capped at equity, sequential", async () => {

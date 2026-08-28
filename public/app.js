@@ -732,6 +732,7 @@ async function loadTrades() {
         <div class="tile"><div class="v">$${fmtP(r.total_value, 0)}</div><div class="l">deployed</div></div>
         ${r.biggest ? `<div class="tile"><div class="v">${esc(r.biggest.symbol)}</div><div class="l">biggest risk · $${fmtP(r.biggest.risk, 0)}</div></div>` : ""}
         ${r.no_stop_count ? `<div class="tile"><div class="v down">${r.no_stop_count}</div><div class="l">position(s) with NO STOP</div></div>` : ""}
+        ${r.correlation && r.correlation.effective_positions != null ? `<div class="tile"><div class="v ${r.correlation.effective_positions < r.positions.length * 0.6 ? "down" : ""}">${r.correlation.effective_positions}</div><div class="l">effective positions (of ${r.positions.length}) · avg ρ ${r.correlation.avg_correlation ?? "—"}</div></div>` : ""}
       </div>
       ${(r.warnings || []).length ? `<div class="warn-banner">${r.warnings.map(esc).join("<br>")}</div>` : ""}`;
   }).catch(() => { $("risk-panel").innerHTML = ""; });

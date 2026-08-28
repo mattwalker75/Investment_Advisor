@@ -98,6 +98,94 @@ async function equityCurves() {
   };
 }
 
+// ---- Correlation: do these positions actually diversify each other? ----
+// Pairwise Pearson correlation of daily log returns (120d, aligned by date), plus the
+// "effective number of independent bets": N_eff = 1 / (w'ρw) with value weights — six
+// highly-correlated positions can behave like two.
+function pearson(a, b) {
+  const n = Math.min(a.length, b.length);
+  if (n < 20) return null;
+  let sa = 0, sb = 0;
+  for (let i = 0; i < n; i++) { sa += a[i]; sb += b[i]; }
+  const ma = sa / n, mb = sb / n;
+  let cov = 0, va = 0, vb = 0;
+  for (let i = 0; i < n; i++) { const da = a[i] - ma, db2 = b[i] - mb; cov += da * db2; va += da * da; vb += db2 * db2; }
+  return va > 0 && vb > 0 ? cov / Math.sqrt(va * vb) : null;
+}
+function effectiveBets(weights, matrix) {
+  const sum = weights.reduce((s, w) => s + w, 0);
+  if (!(sum > 0)) return null;
+  const w = weights.map((x) => x / sum);
+  let q = 0;
+  for (let i = 0; i < w.length; i++) {
+    for (let j = 0; j < w.length; j++) q += w[i] * w[j] * (matrix[i][j] != null ? matrix[i][j] : (i === j ? 1 : 0));
+  }
+  return q > 0 ? 1 / q : null;
+}
+
+async function correlation() {
+  const { yahooSym } = require("../util");
+  const open = await db.all("SELECT symbol, asset_type, side, qty, entry_price FROM trades WHERE status='open'");
+  // Options ride their underlying's returns; weights use position value (premium ×100).
+  const bySym = {};
+  for (const t of open) {
+    const sym = t.asset_type === "option" ? t.symbol : yahooSym(t);
+    const value = t.entry_price * t.qty * (t.asset_type === "option" ? 100 : 1);
+    bySym[sym] = (bySym[sym] || 0) + value;
+  }
+  const symbols = Object.keys(bySym);
+  if (symbols.length < 2) return null;
+  const rets = {};
+  for (const sym of symbols) {
+    try {
+      const candles = await yahoo.history(sym, 180, "1d");
+      const m = new Map();
+      for (const c of candles.slice(-125)) m.set(c.time, c.close);
+      rets[sym] = m;
+    } catch (_) { rets[sym] = null; }
+  }
+  const usable = symbols.filter((s) => rets[s] && rets[s].size >= 30);
+  if (usable.length < 2) return null;
+  // common dates across all usable symbols → aligned return series
+  let common = null;
+  for (const s of usable) {
+    const dates = new Set(rets[s].keys());
+    common = common ? [...common].filter((d) => dates.has(d)) : [...dates];
+  }
+  common.sort();
+  if (common.length < 25) return null;
+  const series = {};
+  for (const s of usable) {
+    const closes = common.map((d) => rets[s].get(d));
+    series[s] = closes.slice(1).map((c, i) => Math.log(c / closes[i]));
+  }
+  const matrix = usable.map((a) => usable.map((b) => {
+    if (a === b) return 1;
+    const r = pearson(series[a], series[b]);
+    return r == null ? null : +r.toFixed(2);
+  }));
+  const high_pairs = [];
+  let rhoSum = 0, rhoN = 0;
+  for (let i = 0; i < usable.length; i++) {
+    for (let j = i + 1; j < usable.length; j++) {
+      const rho = matrix[i][j];
+      if (rho == null) continue;
+      rhoSum += rho; rhoN++;
+      if (rho >= 0.7) high_pairs.push({ a: usable[i], b: usable[j], rho });
+    }
+  }
+  const eff = effectiveBets(usable.map((s) => bySym[s]), matrix);
+  return {
+    symbols: usable,
+    matrix,
+    avg_correlation: rhoN ? +(rhoSum / rhoN).toFixed(2) : null,
+    effective_positions: eff != null ? +eff.toFixed(1) : null,
+    high_pairs: high_pairs.sort((a, b) => b.rho - a.rho),
+    window_days: common.length,
+    note: "Daily-return correlation over ~6 months. effective_positions = how many INDEPENDENT bets this portfolio behaves like (value-weighted).",
+  };
+}
+
 // ---- Risk panel: "how much can today cost me?" ----
 // Risk per position = the loss if its stop hits (entry→stop distance × remaining qty,
 // ×100 for options). No stop set → the FULL position value counts as worst-case (and
@@ -143,6 +231,12 @@ async function riskPanel() {
   for (const r of rows.filter((x) => x.no_stop)) warnings.push(`⚠ ${r.symbol} has NO STOP — its full $${r.value.toFixed(0)} counts as risk. Set one (✎ in the table, or ask the advisor).`);
   for (const r of rows.filter((x) => !x.no_stop && x.risk_pct_of_account > perTrade * 3))
     warnings.push(`⚠ ${r.symbol} risks ${r.risk_pct_of_account}% of the account — ${(r.risk_pct_of_account / perTrade).toFixed(1)}× your ${perTrade}%/trade setting.`);
+  // Correlation: are these positions actually independent bets?
+  const corr = await correlation().catch(() => null);
+  if (corr) {
+    for (const p of corr.high_pairs.slice(0, 4))
+      warnings.push(`⚠ ${p.a} & ${p.b} move together (ρ ${p.rho}) — two tickers, closer to one bet.`);
+  }
   return {
     account_size: account,
     total_value: +totalValue.toFixed(2),
@@ -151,9 +245,10 @@ async function riskPanel() {
     no_stop_count: noStopCount,
     biggest: rows[0] || null,
     positions: rows,
+    correlation: corr,
     warnings,
     note: "Risk = loss if every stop hits. No-stop positions count their full value; long options cap at their premium. Option values approximate at entry premium.",
   };
 }
 
-module.exports = { concentration, equityCurves, riskPanel };
+module.exports = { concentration, equityCurves, riskPanel, correlation, pearson, effectiveBets };
