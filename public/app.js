@@ -44,6 +44,21 @@ async function loadMarketStrip() {
     renderSentiment(d.sentiment);
     renderNews(d.headlines);
   } catch (_) { /* strip is decorative — never block the app on it */ }
+  loadProviderHealth();
+}
+
+// Data-source health indicator in the topbar: silent when everything is fine, a chip
+// with the reason when degraded (Yahoo cooldown) or running keyless.
+async function loadProviderHealth() {
+  try {
+    const h = await api("/api/health/providers");
+    const el = $("src-badge");
+    if (h.status === "ok") { el.textContent = ""; el.title = ""; return; }
+    el.innerHTML = h.status === "degraded"
+      ? ' · <span class="down">⛔ data throttled</span>'
+      : ' · <span style="color:var(--amber,#fbbf24)">⚠ keyless data</span>';
+    el.title = (h.hints || []).join("\n");
+  } catch (_) {}
 }
 
 let scanPoll = null;

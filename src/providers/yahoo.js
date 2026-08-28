@@ -346,4 +346,15 @@ async function search(query) {
     .map((q) => ({ symbol: q.symbol, name: q.shortname || q.longname || "", exchange: q.exchDisp || "", type: q.quoteType || "" }));
 }
 
-module.exports = { quote, quotes, history, optionsChain, nextEarnings, sector, search };
+// Data-source health for the UI indicator: is the Yahoo breaker open, and which keys
+// are set (keyless stock data = throttle-prone, worth surfacing to the user).
+function providerHealth() {
+  const k = keys();
+  return {
+    yahoo_cooling_down: Date.now() < yahooCooldownUntil,
+    yahoo_cooldown_seconds_left: Math.max(0, Math.round((yahooCooldownUntil - Date.now()) / 1000)),
+    keys_set: { fmp: !!k.fmp_key, finnhub: !!k.finnhub_key, alpha_vantage: !!k.alpha_vantage_key },
+  };
+}
+
+module.exports = { quote, quotes, history, optionsChain, nextEarnings, sector, search, providerHealth };

@@ -55,6 +55,16 @@ router.get("/market", async (_req, res) => {
   res.json({ quotes, sentiment: senti, headlines: heads, regime });
 });
 
+// Data-source health: drives the topbar indicator so degradation is legible instead of
+// silent ("why does everything feel stale?" → "Yahoo is cooling down / no keys set").
+router.get("/health/providers", (_req, res) => {
+  const h = yahoo.providerHealth();
+  const hints = [];
+  if (h.yahoo_cooling_down) hints.push(`Yahoo is rate-limiting this machine — paused ~${Math.max(1, Math.ceil(h.yahoo_cooldown_seconds_left / 60))} more min. Cached data and keyed sources serve meanwhile.`);
+  if (!h.keys_set.fmp && !h.keys_set.finnhub) hints.push("Stock data is running keyless on Yahoo alone (throttle-prone). Two free keys fix it — Settings → Data feeds.");
+  res.json({ ...h, status: h.yahoo_cooling_down ? "degraded" : (!h.keys_set.fmp && !h.keys_set.finnhub) ? "keyless" : "ok", hints });
+});
+
 router.get("/whales", async (_req, res) => {
   try { res.json(await whales.snapshot()); } catch (e) { res.status(502).json({ error: e.message }); }
 });
