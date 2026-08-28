@@ -2,9 +2,14 @@
 // Equity-curve math against a real (throwaway) SQLite database.
 const { test, before, after } = require("node:test");
 const assert = require("node:assert");
-const { useTempDb } = require("./helpers");
+const { useTempDb, stubModule } = require("./helpers");
 
 useTempDb();
+// portfolio.js binds the yahoo module at load time — stub BEFORE anything requires it.
+stubModule("providers/yahoo.js", {
+  quotes: async (syms) => Object.fromEntries(syms.map((s) => [s, { price: 100 }])),
+  sector: async () => ({ sector: null }),
+});
 const db = require("../src/db");
 const settings = require("../src/settings");
 
@@ -30,6 +35,24 @@ test("equityCurves: realized curve compounds closed-trade P&L in close order", a
   assert.strictEqual(e.actual.series[1].value, 10180);
   assert.strictEqual(e.actual.stats.pnl, 180);
   assert.ok(e.actual.stats.max_drawdown_pct > 1 && e.actual.stats.max_drawdown_pct < 1.4);
+});
+
+test("riskPanel: stop-distance risk, no-stop flagged at full value, long options cap at premium", async () => {
+  const now = Date.now();
+  await db.run("INSERT INTO trades (rec_id,created_at,asset_type,symbol,side,qty,entry_price,entry_at,stop_loss,targets,status) VALUES (NULL,?,'stock','RISK1','buy',10,100,?,95,'[]','open')", [now, now]);
+  await db.run("INSERT INTO trades (rec_id,created_at,asset_type,symbol,side,qty,entry_price,entry_at,stop_loss,targets,status) VALUES (NULL,?,'stock','RISK2','buy',5,100,?,NULL,'[]','open')", [now, now]);
+  await db.run("INSERT INTO trades (rec_id,created_at,asset_type,symbol,side,qty,entry_price,entry_at,stop_loss,targets,option_details,status) VALUES (NULL,?,'option','RISK3','buy',2,3.5,?,NULL,'[]',?,'open')", [now, now, JSON.stringify({ type: "call", strike: 105, expiry: "2099-01-01" })]);
+  const r = await require("../src/engine/portfolio").riskPanel();
+  const by = Object.fromEntries(r.positions.map((p) => [p.symbol, p]));
+  assert.strictEqual(by.RISK1.risk, 50, "10 × (100−95)");
+  assert.strictEqual(by.RISK2.no_stop, true);
+  assert.strictEqual(by.RISK2.risk, 500, "no stop → full value 5×100");
+  assert.strictEqual(by.RISK3.risk, 700, "long option → premium 2×3.50×100, no stop needed");
+  assert.strictEqual(by.RISK3.no_stop, false, "defined-risk options are not flagged");
+  assert.strictEqual(r.no_stop_count, 1, "only the stock without a stop is flagged");
+  assert.strictEqual(r.total_risk, 1250);
+  assert.ok(r.warnings.some((w) => /RISK2.*NO STOP/.test(w)));
+  await db.run("DELETE FROM trades WHERE symbol LIKE 'RISK%'");
 });
 
 test("equityCurves: what-if sizes by risk distance, capped at equity, sequential", async () => {

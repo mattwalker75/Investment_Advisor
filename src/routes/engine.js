@@ -117,6 +117,49 @@ router.post("/advisor-chat", async (req, res) => {
   } catch (e) { res.status(502).json({ error: e.message }); }
 });
 
+// ---------- Performance attribution: where does the edge actually come from? ----------
+router.get("/performance/attribution", async (_req, res) => {
+  try {
+    const recs = await db.all("SELECT asset_type, status, confidence, created_at, outcome, inputs FROM recommendations ORDER BY id");
+    const fin = recs
+      .map((r) => ({ ...r, o: J(r.outcome, {}) || {}, inp: J(r.inputs, {}) || {} }))
+      .filter((r) => (["stopped", "target_hit"].includes(r.status) || (r.status === "closed" && r.o.result === "expired_settled")) && r.o.pnl_pct != null);
+    const grp = (rows) => {
+      const wins = rows.filter((r) => r.o.pnl_pct > 0);
+      return { n: rows.length, win_rate: rows.length ? +((wins.length / rows.length) * 100).toFixed(1) : null,
+        avg_pnl_pct: rows.length ? +(rows.reduce((s, r) => s + r.o.pnl_pct, 0) / rows.length).toFixed(2) : null };
+    };
+    const sourceOf = (r) => r.inp.source === "advisor_chat" ? "chat"
+      : r.inp.source === "strategy_signal" ? "your strategies"
+      : r.asset_type === "option" ? "options scan" : "scan";
+    const regimeOf = (r) => (r.inp.market && r.inp.market.regime && r.inp.market.regime.regime) || "unknown";
+    const groupBy = (fn) => {
+      const m = {};
+      for (const r of fin) (m[fn(r)] = m[fn(r)] || []).push(r);
+      return Object.fromEntries(Object.entries(m).map(([k, v]) => [k, grp(v)]));
+    };
+    // Calibration drift: the earlier half of finished recs vs the later half.
+    const half = Math.floor(fin.length / 2);
+    const drift = fin.length >= 8 ? {
+      early: { ...grp(fin.slice(0, half)), avg_confidence: +(fin.slice(0, half).reduce((s, r) => s + (r.confidence || 0), 0) / half).toFixed(2) },
+      late: { ...grp(fin.slice(half)), avg_confidence: +(fin.slice(half).reduce((s, r) => s + (r.confidence || 0), 0) / (fin.length - half)).toFixed(2) },
+    } : null;
+    // Realized trade dollars by asset class.
+    const closed = await db.all("SELECT asset_type, pnl FROM trades WHERE status='closed'");
+    const tradeDollars = {};
+    for (const t of closed) tradeDollars[t.asset_type] = +((tradeDollars[t.asset_type] || 0) + (t.pnl || 0)).toFixed(2);
+    res.json({
+      finished: fin.length,
+      by_source: groupBy(sourceOf),
+      by_regime_at_entry: groupBy(regimeOf),
+      by_asset: groupBy((r) => r.asset_type),
+      calibration_drift: drift,
+      realized_trade_pnl_by_asset: tradeDollars,
+      note: "Shadow-graded recommendation outcomes split by origin, market regime at entry, and asset class — plus realized trade dollars. Small groups (n<10) are noise, not signal.",
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ---------- Performance / success rate ----------
 router.get("/performance", async (_req, res) => {
   const recs = await db.all("SELECT id, symbol, asset_type, side, status, confidence, created_at, outcome, taken FROM recommendations ORDER BY id DESC LIMIT 1000");

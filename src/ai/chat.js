@@ -117,6 +117,7 @@ const TOOL_DEFS = [
   T("revalidate_recommendation", "Re-validate an open/tracking recommendation against CURRENT data using the real revalidation engine: verdict valid | adjust (levels updated in place) | withdraw (closed, unless the user has taken the trade). Use for 'is that idea still good?'.",
     { id: { type: "number" } }, ["id"]),
   T("get_portfolio_concentration", "Sector-concentration check across the user's OPEN positions: position counts per sector plus correlated-risk warnings."),
+  T("get_portfolio_risk", "The risk panel: total $ lost if EVERY stop hits (no-stop positions count their full value and are flagged; long options cap at premium), % of account, biggest single risk, and per-position risk rows. Use for 'how much am I risking?' / 'review my risk'."),
   T("compare_symbols", "Side-by-side technical comparison of 2-5 symbols on the user's own indicators: price, RSI, trend posture, ATR%, volatility percentile, relative strength vs SPY, and fired signals. Stocks and crypto both accepted, any spelling.",
     { symbols: { type: "array", items: { type: "string" }, description: "2-5 symbols" },
       asset_type: { type: "string", enum: ["stock", "crypto"], description: "optional hint applied to all" } }, ["symbols"]),
@@ -320,6 +321,7 @@ async function execTool(name, args = {}) {
     case "check_position_health": return await require("../engine/health").checkPositions(args.trade_id || null);
     case "revalidate_recommendation": return await require("../engine/recommender").revalidate(Number(args.id));
     case "get_portfolio_concentration": return await require("../engine/portfolio").concentration();
+    case "get_portfolio_risk": return await require("../engine/portfolio").riskPanel();
     case "compare_symbols": {
       const list = (Array.isArray(args.symbols) ? args.symbols : []).slice(0, 5);
       if (list.length < 2) return { error: "give 2-5 symbols to compare" };

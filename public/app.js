@@ -685,6 +685,19 @@ async function loadTrades() {
     $("concentration-banner").innerHTML = (c.warnings || []).length
       ? `<div class="warn-banner">${c.warnings.map((w) => esc(w)).join("<br>")}</div>` : "";
   }).catch(() => {});
+  // Risk panel: "how much can today cost me?"
+  api("/api/portfolio/risk").then((r) => {
+    if (!r.positions || !r.positions.length) { $("risk-panel").innerHTML = ""; return; }
+    $("risk-panel").innerHTML = `
+      <div class="tiles" style="margin:4px 0 8px">
+        <div class="tile"><div class="v down">$${fmtP(r.total_risk, 0)}</div><div class="l">at risk if all stops hit</div></div>
+        <div class="tile"><div class="v ${r.risk_pct_of_account > 10 ? "down" : ""}">${r.risk_pct_of_account}%</div><div class="l">of $${fmtP(r.account_size, 0)} account</div></div>
+        <div class="tile"><div class="v">$${fmtP(r.total_value, 0)}</div><div class="l">deployed</div></div>
+        ${r.biggest ? `<div class="tile"><div class="v">${esc(r.biggest.symbol)}</div><div class="l">biggest risk · $${fmtP(r.biggest.risk, 0)}</div></div>` : ""}
+        ${r.no_stop_count ? `<div class="tile"><div class="v down">${r.no_stop_count}</div><div class="l">position(s) with NO STOP</div></div>` : ""}
+      </div>
+      ${(r.warnings || []).length ? `<div class="warn-banner">${r.warnings.map(esc).join("<br>")}</div>` : ""}`;
+  }).catch(() => { $("risk-panel").innerHTML = ""; });
   // Apply the advisor's suggested stop with one click.
   document.querySelectorAll("[data-applystop]").forEach((b) => b.addEventListener("click", async () => {
     try { await api(`/api/trades/${b.dataset.applystop}`, { method: "PATCH", body: JSON.stringify({ stop_loss: Number(b.dataset.price) }) }); loadTrades(); }
@@ -753,6 +766,30 @@ async function loadPerformance() {
     <div class="tile"><div class="v ${cls(T.by_term.long.pnl)}">$${fmtP(T.by_term.long.pnl, 0)}</div><div class="l">long-term P&L (${T.by_term.long.count})</div></div>` : ""}`;
   loadEquityCurve();
   labRefreshSaved();
+  loadAttribution();
+}
+
+// Attribution: the honest stats split so they teach something.
+async function loadAttribution() {
+  try {
+    const a = await api("/api/performance/attribution");
+    if (!a.finished) { $("attr-body").innerHTML = '<div class="hint">Builds as recommendations finish (shadow-graded, taken or not).</div>'; return; }
+    const tbl = (title, obj, keyHead) => `
+      <table class="grid" style="margin-top:6px"><thead><tr><th>${title}</th><th>Graded</th><th>Win rate</th><th>Avg outcome</th></tr></thead>
+      <tbody>${Object.entries(obj).map(([k, g]) => `<tr>
+        <td>${esc(k)}${g.n < 10 ? ' <span class="hint">(small sample)</span>' : ""}</td>
+        <td class="mono">${g.n}</td>
+        <td class="mono ${g.win_rate >= 50 ? "up" : "down"}">${g.win_rate ?? "—"}%</td>
+        <td class="mono ${cls(g.avg_pnl_pct)}">${fmtPct(g.avg_pnl_pct)}</td></tr>`).join("")}</tbody></table>`;
+    const drift = a.calibration_drift;
+    $("attr-body").innerHTML = `
+      ${tbl("By source", a.by_source)}
+      ${tbl("By regime at entry", a.by_regime_at_entry)}
+      ${tbl("By asset class", a.by_asset)}
+      ${drift ? `<div class="hint" style="margin-top:8px"><b>Calibration drift:</b> early half ${drift.early.win_rate}% win @ avg conf ${drift.early.avg_confidence} → late half ${drift.late.win_rate}% win @ avg conf ${drift.late.avg_confidence}</div>` : ""}
+      ${Object.keys(a.realized_trade_pnl_by_asset || {}).length ? `<div class="hint" style="margin-top:4px"><b>Realized trade P&L:</b> ${Object.entries(a.realized_trade_pnl_by_asset).map(([k, v]) => `${esc(k)} ${v >= 0 ? "+" : ""}$${fmtP(v, 0)}`).join(" · ")}</div>` : ""}
+      <div class="hint" style="margin-top:4px">${esc(a.note)}</div>`;
+  } catch (_) {}
 }
 
 // Equity curves: realized account curve + the "what if I took every rec" paper curve.
@@ -1326,7 +1363,7 @@ async function loadSettings() {
     <div class="frow check vgroup"><input type="checkbox" id="v-tab-watchlist" ${s.view.tabs.watchlist !== false ? "checked" : ""}><label for="v-tab-watchlist"><b>Watchlist</b></label></div>
     <div class="frow check vgroup"><input type="checkbox" id="v-tab-trades" ${s.view.tabs.trades !== false ? "checked" : ""}><label for="v-tab-trades"><b>Trades</b></label></div>
     <div class="frow check vgroup"><input type="checkbox" id="v-tab-performance" ${s.view.tabs.performance !== false ? "checked" : ""}><label for="v-tab-performance"><b>Performance</b></label></div>
-    ${Object.entries({ rec_performance: "Recommendation performance", your_trades: "Your trades", equity: "Equity curve", calibration: "Confidence calibration", backtest: "Threshold backtest", strategy_lab: "Strategy Lab" }).map(([k, label]) =>
+    ${Object.entries({ rec_performance: "Recommendation performance", your_trades: "Your trades", equity: "Equity curve", calibration: "Confidence calibration", backtest: "Threshold backtest", strategy_lab: "Strategy Lab", attribution: "Attribution" }).map(([k, label]) =>
       `<div class="frow check sub-check"><input type="checkbox" id="v-perf-${k}" ${s.view.performance[k] !== false ? "checked" : ""}><label for="v-perf-${k}">${label}</label></div>`).join("")}
     <div class="save-row"><button class="primary" id="save-view">Save</button><span id="note-view"></span></div>
   </div>
@@ -1524,7 +1561,7 @@ async function loadSettings() {
       await api("/api/settings/view", { method: "PUT", body: JSON.stringify({
         tabs: pick("v-tab-", ["recommendations", "charts", "watchlist", "trades", "performance"]),
         dashboard: pick("v-dash-", ["briefing", "sentiment", "success", "latest_recs", "headlines", "figures", "activity"]),
-        performance: pick("v-perf-", ["rec_performance", "your_trades", "equity", "calibration", "backtest", "strategy_lab"]),
+        performance: pick("v-perf-", ["rec_performance", "your_trades", "equity", "calibration", "backtest", "strategy_lab", "attribution"]),
       }) });
       await loadAppSettings(); applyView();
       note("note-view", "Saved ✓ — view updated");
@@ -1797,7 +1834,7 @@ chatText.addEventListener("keydown", (e) => {
 const VIEW_MAP = {
   tabs: { recommendations: "recs", charts: "charts", watchlist: "watchlist", trades: "trades", performance: "performance" },
   dashboard: { briefing: "card-briefing", sentiment: "card-sentiment", success: "card-success", latest_recs: "card-latest", headlines: "card-news", figures: "card-figures", activity: "card-events" },
-  performance: { rec_performance: "card-perf-recs", your_trades: "card-perf-trades", equity: "card-perf-equity", calibration: "card-perf-cal", backtest: "card-perf-bt", strategy_lab: "card-perf-lab" },
+  performance: { rec_performance: "card-perf-recs", your_trades: "card-perf-trades", equity: "card-perf-equity", calibration: "card-perf-cal", backtest: "card-perf-bt", strategy_lab: "card-perf-lab", attribution: "card-perf-attr" },
 };
 function applyView() {
   const v = appSettings && appSettings.view;

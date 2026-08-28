@@ -98,4 +98,62 @@ async function equityCurves() {
   };
 }
 
-module.exports = { concentration, equityCurves };
+// ---- Risk panel: "how much can today cost me?" ----
+// Risk per position = the loss if its stop hits (entry→stop distance × remaining qty,
+// ×100 for options). No stop set → the FULL position value counts as worst-case (and
+// gets flagged loudly). Long options are defined-risk: never more than the premium.
+async function riskPanel() {
+  const s = settings.getSync();
+  const account = s.preferences.risk.account_size || 10000;
+  const open = await db.all("SELECT * FROM trades WHERE status='open'");
+  if (!open.length) return { account_size: account, positions: [], total_value: 0, total_risk: 0, risk_pct_of_account: 0, no_stop_count: 0, warnings: [] };
+  const { yahooSym } = require("../util");
+  const quotes = await yahoo.quotes([...new Set(open.filter((t) => t.asset_type !== "option").map(yahooSym))]).catch(() => ({}));
+  const rows = [];
+  let totalRisk = 0, totalValue = 0, noStopCount = 0;
+  for (const t of open) {
+    const mult = t.asset_type === "option" ? 100 : 1;
+    const exits = (J(t.exits, []) || []).filter((e) => !e.alert);
+    const remaining = t.qty - exits.reduce((s2, e) => s2 + (e.qty || 0), 0);
+    if (remaining <= 0) continue;
+    const q = t.asset_type !== "option" ? quotes[yahooSym(t)] : null;
+    const price = (q && q.price) ?? t.entry_price;          // options approximate at entry premium
+    const value = +(price * remaining * mult).toFixed(2);
+    let risk, no_stop = false;
+    const premiumCap = t.asset_type === "option" && t.side === "buy" ? +(t.entry_price * remaining * mult).toFixed(2) : null;
+    if (t.stop_loss != null && t.stop_loss > 0) {
+      risk = +(Math.abs(t.entry_price - t.stop_loss) * remaining * mult).toFixed(2);
+      if (premiumCap != null) risk = Math.min(risk, premiumCap);
+    } else if (premiumCap != null) {
+      risk = premiumCap;                                    // defined-risk even without a stop
+    } else {
+      no_stop = true; noStopCount++;
+      risk = value;                                         // worst-case proxy: the whole position
+    }
+    totalRisk += risk; totalValue += value;
+    rows.push({
+      symbol: t.symbol, asset_type: t.asset_type, side: t.side, qty: remaining,
+      value, risk, risk_pct_of_account: +((risk / account) * 100).toFixed(2),
+      stop_loss: t.stop_loss, no_stop,
+    });
+  }
+  rows.sort((a, b) => b.risk - a.risk);
+  const perTrade = s.preferences.risk.risk_per_trade_pct || 1;
+  const warnings = [];
+  for (const r of rows.filter((x) => x.no_stop)) warnings.push(`⚠ ${r.symbol} has NO STOP — its full $${r.value.toFixed(0)} counts as risk. Set one (✎ in the table, or ask the advisor).`);
+  for (const r of rows.filter((x) => !x.no_stop && x.risk_pct_of_account > perTrade * 3))
+    warnings.push(`⚠ ${r.symbol} risks ${r.risk_pct_of_account}% of the account — ${(r.risk_pct_of_account / perTrade).toFixed(1)}× your ${perTrade}%/trade setting.`);
+  return {
+    account_size: account,
+    total_value: +totalValue.toFixed(2),
+    total_risk: +totalRisk.toFixed(2),
+    risk_pct_of_account: +((totalRisk / account) * 100).toFixed(2),
+    no_stop_count: noStopCount,
+    biggest: rows[0] || null,
+    positions: rows,
+    warnings,
+    note: "Risk = loss if every stop hits. No-stop positions count their full value; long options cap at their premium. Option values approximate at entry premium.",
+  };
+}
+
+module.exports = { concentration, equityCurves, riskPanel };

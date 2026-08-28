@@ -83,6 +83,7 @@
             <button class="chip" data-q="Run a health check on my open positions and tell me if anything deserves selling, a tighter stop, or a partial exit.">Should I sell anything?</button>
             <button class="chip" data-q="Anything big on the macro calendar this week (FOMC, CPI, jobs), and any of my positions with earnings coming up?">Anything big this week?</button>
             <button class="chip" data-q="How am I actually doing? Look at my closed-trade P&L, the system's shadow-tracked track record, and the what-if curve — give me the honest read.">How am I doing overall?</button>
+            <button class="chip" data-q="Review my portfolio risk: how much do I lose if every stop hits, which positions have no stop, and where am I over-concentrated? Use the risk panel and concentration tools.">Review my risk</button>
           </div>
         </div>
         <div class="card wide" id="card-figures">
@@ -183,6 +184,7 @@
         <button id="trade-import-btn" class="ghost" title="Bring in existing positions from a broker CSV export">📥 Import CSV</button>
         <span class="hint" id="health-note"></span>
       </div>
+      <div id="risk-panel"></div>
       <div id="concentration-banner"></div>
       <div id="trades-open"></div>
       <h3 class="section">Closed trades</h3>
@@ -226,6 +228,10 @@
             <label>Slippage %</label><input id="bt-slip" type="number" min="0" max="2" step="0.05" value="0.1" class="short-in">
             <button id="bt-run" class="ghost">Run backtest</button><span class="hint" id="bt-note"></span></div>
           <div id="bt-results"></div>
+        </div>
+        <div class="card wide" id="card-perf-attr">
+          <h3>🔬 Attribution <span class="hint-inline">— where the edge actually comes from: by source, regime at entry, and asset class</span></h3>
+          <div id="attr-body"><div class="hint">Builds as recommendations finish.</div></div>
         </div>
         <div class="card wide" id="card-perf-lab">
           <h3>🧪 Strategy Lab <span class="hint-inline">— describe YOUR strategy in plain English, test it, get honest feedback</span></h3>

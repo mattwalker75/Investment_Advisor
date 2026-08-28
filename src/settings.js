@@ -122,7 +122,7 @@ const DEFAULTS = {
   view: {
     tabs: { recommendations: true, charts: true, watchlist: true, trades: true, performance: true },
     dashboard: { briefing: true, sentiment: true, success: true, latest_recs: true, headlines: true, figures: true, activity: true },
-    performance: { rec_performance: true, your_trades: true, equity: true, calibration: true, backtest: true, strategy_lab: true },
+    performance: { rec_performance: true, your_trades: true, equity: true, calibration: true, backtest: true, strategy_lab: true, attribution: true },
   },
 
   // --- Notifications: how timing alerts reach you beyond the Activity feed. ---

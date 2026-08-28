@@ -226,6 +226,12 @@ router.get("/portfolio/concentration", async (_req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Portfolio risk panel: total $ at risk if every stop hits, no-stop flags, biggest risk.
+router.get("/portfolio/risk", async (_req, res) => {
+  try { res.json(await require("../engine/portfolio").riskPanel()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Equity curves: realized account curve + the what-if-every-rec-was-taken paper curve.
 router.get("/portfolio/equity", async (_req, res) => {
   try { res.json(await require("../engine/portfolio").equityCurves()); }
