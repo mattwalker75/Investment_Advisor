@@ -68,6 +68,14 @@ function start() {
     } catch (e) { console.error("[scheduler] health check failed:", e.message); }
   }, 5 * 60 * 1000));
 
+  // Notification rules: evaluate the user's "tell me when…" rules every 5 minutes.
+  timers.push(setInterval(async () => {
+    try {
+      const r = await require("./engine/alerts").evaluateRules();
+      if (r.fired) console.log(`[scheduler] alert rules: ${r.fired} fired (${r.evaluated} evaluated)`);
+    } catch (e) { console.error("[scheduler] alert rules failed:", e.message); }
+  }, 5 * 60 * 1000));
+
   // Daily DB backup (SQLite): the database is the entire accumulated track record.
   // Fires when the newest backup is >24h old — checked every 30 min, plus once shortly
   // after boot so a long-stopped instance catches up immediately.

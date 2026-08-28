@@ -121,7 +121,7 @@ const DEFAULTS = {
   // affects the AI analysis, scanning, or tracking (those all run server-side). ---
   view: {
     tabs: { recommendations: true, charts: true, watchlist: true, trades: true, performance: true },
-    dashboard: { briefing: true, sentiment: true, success: true, latest_recs: true, headlines: true, activity: true },
+    dashboard: { briefing: true, sentiment: true, success: true, latest_recs: true, headlines: true, figures: true, activity: true },
     performance: { rec_performance: true, your_trades: true, equity: true, calibration: true, backtest: true, strategy_lab: true },
   },
 
@@ -129,7 +129,10 @@ const DEFAULTS = {
   notifications: {
     browser: true,               // desktop notifications while the page is open
     webhook_url: "",             // ntfy.sh topic URL, Discord or Slack webhook — auto-detected
-    notify_on: { stops_targets: true, health: true, scans: true, stop_suggestions: true, briefing: true },
+    notify_on: { stops_targets: true, health: true, scans: true, stop_suggestions: true, briefing: true, custom_alerts: true },
+    // Quiet hours: webhook delivery pauses in this local-time window — EXCEPT crossed
+    // stops, which always break through. Events still land in the Activity feed.
+    quiet_hours: { enabled: false, start_hour: 22, end_hour: 7 },
   },
 };
 

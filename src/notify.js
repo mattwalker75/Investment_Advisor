@@ -14,7 +14,20 @@ const GATES = {
   health: "health",
   scan: "scans", rec_new: "scans", rec_expired: "scans",
   briefing: "briefing",
+  alert_rule: "custom_alerts",   // the notification-rules engine (digest hits never gate in)
 };
+
+// Quiet hours: suppress webhook delivery in the configured window — EXCEPT stop_hit
+// (a crossed stop / expiring option is exactly what should break through). Events still
+// land in the feed either way.
+function inQuietHours(cfg) {
+  const q = cfg.quiet_hours || {};
+  if (!q.enabled) return false;
+  const h = new Date().getHours();
+  const s = Number(q.start_hour) || 0, e = Number(q.end_hour) || 0;
+  if (s === e) return false;
+  return s < e ? (h >= s && h < e) : (h >= s || h < e);   // window may wrap midnight
+}
 
 // ntfy priority per event type: a crossed stop should buzz through a phone's focus
 // mode; a daily briefing shouldn't. (Discord/Slack have no priority concept — ignored.)
@@ -59,6 +72,7 @@ function eventNotify(type, symbol, message) {
   const cfg = settings.getSync().notifications || {};
   const gate = GATES[type];
   if (!gate || !(cfg.notify_on || {})[gate]) return;
+  if (type !== "stop_hit" && inQuietHours(cfg)) return;   // urgent stop-hits break through
   const title = `Investment Advisor${symbol ? " · " + symbol : ""}`;
   sendWebhook(title, message, { type }).catch(() => {});
 }

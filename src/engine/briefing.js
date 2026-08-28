@@ -35,11 +35,14 @@ async function gather() {
     });
   }
   const recs = await db.all("SELECT symbol, side, status, entry_low, entry_high, stop_loss, confidence, created_at FROM recommendations WHERE status IN ('open','tracking') ORDER BY id DESC LIMIT 12");
+  // Digest-delivery alert-rule hits queue up here instead of buzzing individually.
+  const digest = await require("./alerts").drainDigest().catch(() => []);
   return {
     as_of: new Date().toString(),
     market: { quotes, sentiment: senti, headlines: heads.map((h) => h.title) },
     open_positions: positions,
     active_recommendations: recs,
+    queued_alerts: digest.map((d) => d.message),
   };
 }
 
@@ -51,7 +54,7 @@ Given live data, produce a tight, skimmable morning read in markdown (max ~250 w
 1. **Market**: one-two lines — indexes, BTC, sentiment gauges, the headline that matters.
 2. **Your positions**: per open position, one line — status vs plan (distance to stop/target), and flag anything needing action TODAY (health verdicts, stop suggestions, option expiries).
 3. **Active ideas**: which open recommendations still look actionable.
-4. **Watch today**: 1-3 bullets max.
+4. **Watch today**: 1-3 bullets max. If queued_alerts is non-empty, fold those alert hits in here (they were held for this briefing).
 Be specific with numbers. No fluff, no disclaimers, no greetings.` },
     { role: "user", content: JSON.stringify(data) },
   ], { max_tokens: 1200, task: "light" });

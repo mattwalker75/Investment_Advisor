@@ -138,6 +138,71 @@ router.delete("/watchlist/:id", async (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Notification rules ----------
+router.get("/alerts", async (_req, res) => {
+  const alerts = require("../engine/alerts");
+  res.json({ rules: (await alerts.listRules()).map((r) => ({ ...r, label: alerts.label(r), state: undefined })), types: alerts.RULE_TYPES });
+});
+// Replace the whole rule list (the editor sends it complete). Existing rules keep their
+// evaluation state (seen filings, cooldowns) by id.
+router.put("/alerts", async (req, res) => {
+  try {
+    const alerts = require("../engine/alerts");
+    const existing = await alerts.listRules();
+    const incoming = Array.isArray(req.body && req.body.rules) ? req.body.rules : [];
+    const rules = incoming.map((r) => {
+      const v = alerts.validateRule(r);
+      const prev = existing.find((x) => x.id === v.id);
+      if (prev) v.state = prev.state;
+      return v;
+    });
+    await alerts.saveRules(rules);
+    res.json({ ok: true, rules: rules.map((r) => ({ ...r, label: alerts.label(r), state: undefined })) });
+  } catch (e) { res.status(422).json({ error: e.message }); }
+});
+
+// ---------- Notable figures (congress) + company insiders (Form 4) ----------
+// ?name= filters to one person; follows are figure_filing rules under the hood.
+router.get("/figures", async (req, res) => {
+  try {
+    const whales = require("../providers/whales");
+    const alerts = require("../engine/alerts");
+    const name = String(req.query.name || "").trim();
+    const [people, trades, rules] = await Promise.all([
+      whales.politicians(),
+      name ? whales.politicianTrades(name) : whales.congressFeed().then((f) => f.slice(0, 40)),
+      alerts.listRules(),
+    ]);
+    const followed = rules.filter((r) => r.type === "figure_filing").map((r) => r.params.name);
+    res.json({
+      politicians: people.slice(0, 40), trades, followed,
+      note: people.length ? "Disclosures lag 30–45 days by law; amounts are ranges; options show in descriptions; crypto is essentially absent from congressional disclosures."
+        : "Congressional data needs the free FMP key — Settings → Data feeds.",
+    });
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+// Follow/unfollow = add/remove a figure_filing rule (instant delivery by default).
+router.post("/figures/follow", async (req, res) => {
+  try {
+    const alerts = require("../engine/alerts");
+    const name = String((req.body && req.body.name) || "").trim();
+    if (!name) return res.status(400).json({ error: "name required" });
+    const rules = await alerts.listRules();
+    const i = rules.findIndex((r) => r.type === "figure_filing" && r.params.name.toLowerCase() === name.toLowerCase());
+    if (req.body.unfollow) {
+      if (i >= 0) rules.splice(i, 1);
+    } else if (i < 0) {
+      rules.push(alerts.validateRule({ type: "figure_filing", params: { name }, cooldown_min: 60 }));
+    }
+    await alerts.saveRules(rules);
+    res.json({ ok: true, followed: rules.filter((r) => r.type === "figure_filing").map((r) => r.params.name) });
+  } catch (e) { res.status(422).json({ error: e.message }); }
+});
+router.get("/insiders/:symbol", async (req, res) => {
+  try { res.json(await require("../providers/whales").insiderTrades(req.params.symbol)); }
+  catch (e) { res.status(502).json({ error: e.message }); }
+});
+
 // ---------- Events feed ----------
 router.get("/events", async (req, res) => {
   // LIMIT is inlined (server-clamped int): a bound `LIMIT ?` breaks mysql2's execute().

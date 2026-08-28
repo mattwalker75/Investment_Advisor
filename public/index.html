@@ -85,6 +85,19 @@
             <button class="chip" data-q="How am I actually doing? Look at my closed-trade P&L, the system's shadow-tracked track record, and the what-if curve — give me the honest read.">How am I doing overall?</button>
           </div>
         </div>
+        <div class="card wide" id="card-figures">
+          <h3>🏛 Notable figures <span class="hint-inline">— congressional trades (disclosures lag 30–45 days by law; amounts are ranges) + Form 4 insiders</span></h3>
+          <div class="frow">
+            <input id="fig-search" placeholder="politician… (e.g. Pelosi)" class="short-in" style="width:190px" autocomplete="off">
+            <button id="fig-go" class="ghost small">Search</button>
+            <button id="fig-follow" class="ghost small" hidden>➕ Follow</button>
+            <input id="ins-symbol" placeholder="insiders: symbol…" class="short-in" style="width:150px;text-transform:uppercase" autocomplete="off">
+            <button id="ins-go" class="ghost small" title="SEC Form 4 insider filings for a stock">Form 4</button>
+            <span class="hint" id="fig-note"></span>
+          </div>
+          <div id="fig-followed" style="margin:4px 0"></div>
+          <div id="fig-list"><div class="hint">Loading…</div></div>
+        </div>
         <div class="card" id="card-events">
           <h3>Activity</h3>
           <div class="events" id="dash-events"><div class="hint">Nothing yet.</div></div>

@@ -178,6 +178,7 @@ async function loadDashboard() {
     $("recs-badge").textContent = active.length;
     $("dash-recs").innerHTML = recs.slice(0, 6).map(recRowSmall).join("") || '<div class="hint">No recommendations yet — run a scan.</div>';
   } catch (_) {}
+  loadFigures($("fig-search").value.trim() || null);
   await refreshEvents();   // activity feed + desktop alerts share ONE events fetch
 }
 function recRowSmall(r) {
@@ -186,6 +187,56 @@ function recRowSmall(r) {
     <b class="mono"> ${esc(r.symbol)}</b> ${assetBadge(r)} · entry ${fmtP(r.entry_low)}–${fmtP(r.entry_high)} · stop ${fmtP(r.stop_loss)}
     <span class="chipstat ${r.status}">${r.status}</span>${r.taken ? ' <span class="taken-flag">✓ taken</span>' : ""}</div>`;
 }
+
+/* ---------- notable figures (congress + Form 4 insiders) ---------- */
+async function loadFigures(name) {
+  try {
+    const d = await api("/api/figures" + (name ? "?name=" + encodeURIComponent(name) : ""));
+    $("fig-note").textContent = (d.politicians || []).length ? "" : d.note || "";
+    $("fig-follow").hidden = !name || !(d.trades || []).length;
+    if (name) $("fig-follow").textContent = (d.followed || []).some((f) => f.toLowerCase() === name.toLowerCase()) ? "✓ Following (unfollow)" : "➕ Follow";
+    $("fig-followed").innerHTML = (d.followed || []).length
+      ? "Following: " + d.followed.map((f) => `<span class="chipstat" title="click to view">${esc(f)}</span>`).join(" ") : "";
+    $("fig-followed").querySelectorAll(".chipstat").forEach((c) => c.addEventListener("click", () => { $("fig-search").value = c.textContent; loadFigures(c.textContent); }));
+    $("fig-list").innerHTML = (d.trades || []).length ? `<table class="grid"><thead><tr>
+        <th>Who</th><th>Action</th><th>Ticker</th><th>Amount</th><th>Traded</th><th>Disclosed</th></tr></thead>
+      <tbody>${d.trades.slice(0, 14).map((t) => `<tr>
+        <td>${esc(t.politician)} <span class="hint">${esc(t.chamber || "")}</span></td>
+        <td><span class="side ${t.action === "buy" ? "buy" : t.action === "sell" ? "sell" : ""}">${esc((t.action || "").toUpperCase())}</span>${t.option ? ` <span class="chipstat" title="${esc(t.option.raw || "")}">🧾 ${esc(t.option.kind)}s</span>` : ""}</td>
+        <td class="mono"><b>${esc(t.ticker || "—")}</b>${!t.ticker && t.asset_name ? ` <span class="hint">${esc(t.asset_name.slice(0, 30))}</span>` : ""}</td>
+        <td class="hint">${esc(t.amount || "—")}</td>
+        <td class="hint">${esc(t.traded_at || "—")}</td>
+        <td class="hint">${esc(t.disclosed_at || "—")}</td></tr>`).join("")}</tbody></table>`
+      : `<div class="hint">${name ? "No recent filings matching “" + esc(name) + "” in the current window." : esc(d.note || "No data.")}</div>`;
+  } catch (e) { $("fig-note").textContent = "⚠ " + e.message; }
+}
+$("fig-go").addEventListener("click", () => loadFigures($("fig-search").value.trim() || null));
+$("fig-search").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); loadFigures($("fig-search").value.trim() || null); } });
+$("fig-follow").addEventListener("click", async () => {
+  const name = $("fig-search").value.trim();
+  if (!name) return;
+  const unfollow = $("fig-follow").textContent.includes("unfollow");
+  await api("/api/figures/follow", { method: "POST", body: JSON.stringify({ name, unfollow }) }).catch(() => {});
+  loadFigures(name);
+});
+$("ins-go").addEventListener("click", async () => {
+  const sym = $("ins-symbol").value.trim().toUpperCase();
+  if (!sym) return;
+  $("fig-list").innerHTML = '<div class="hint">Loading Form 4 filings…</div>';
+  try {
+    const d = await api("/api/insiders/" + encodeURIComponent(sym));
+    $("fig-list").innerHTML = (d.trades || []).length ? `<div class="hint" style="margin-bottom:4px"><b>${esc(sym)}</b> insiders — ${esc(d.summary || "")}</div>
+      <table class="grid"><thead><tr><th>Insider</th><th>Role</th><th>Action</th><th>Shares</th><th>Price</th><th>Traded</th></tr></thead>
+      <tbody>${d.trades.slice(0, 14).map((t) => `<tr>
+        <td>${esc(t.insider)}</td><td class="hint">${esc(t.relation || "")}</td>
+        <td><span class="side ${t.action === "buy" ? "buy" : "sell"}">${esc(t.action.toUpperCase())}</span></td>
+        <td class="mono">${t.shares != null ? fmtP(t.shares, 0) : "—"}</td>
+        <td class="mono">${t.price != null ? fmtP(t.price) : "—"}</td>
+        <td class="hint">${esc(t.traded_at || "—")}</td></tr>`).join("")}</tbody></table>`
+      : `<div class="hint">${esc(d.note || "No recent Form 4 filings for " + sym + ".")}</div>`;
+  } catch (e) { $("fig-list").innerHTML = `<div class="hint">⚠ ${esc(e.message)}</div>`; }
+});
+$("ins-symbol").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("ins-go").click(); } });
 
 /* ---------- position sizing (advisory): risk X% of account across entry->stop ---------- */
 let appSettings = null;   // public settings snapshot (risk numbers for sizing math)
@@ -1244,7 +1295,7 @@ async function loadSettings() {
     <h3>👁 View</h3>
     <div class="hint">Show or hide parts of the UI. Display-only — the AI's analysis, scanning, and tracking are never affected.</div>
     <div class="frow check vgroup"><b>Dashboard</b><span class="hint">(always shown)</span></div>
-    ${Object.entries({ briefing: "Daily briefing", sentiment: "Market sentiment", success: "System success rate", latest_recs: "Latest recommendations", headlines: "Headlines", activity: "Activity" }).map(([k, label]) =>
+    ${Object.entries({ briefing: "Daily briefing", sentiment: "Market sentiment", success: "System success rate", latest_recs: "Latest recommendations", headlines: "Headlines", figures: "Notable figures", activity: "Activity" }).map(([k, label]) =>
       `<div class="frow check sub-check"><input type="checkbox" id="v-dash-${k}" ${s.view.dashboard[k] !== false ? "checked" : ""}><label for="v-dash-${k}">${label}</label></div>`).join("")}
     <div class="frow check vgroup"><input type="checkbox" id="v-tab-recommendations" ${s.view.tabs.recommendations !== false ? "checked" : ""}><label for="v-tab-recommendations"><b>Recommendations</b></label></div>
     <div class="frow check vgroup"><input type="checkbox" id="v-tab-charts" ${s.view.tabs.charts !== false ? "checked" : ""}><label for="v-tab-charts"><b>Charts</b></label></div>
@@ -1266,8 +1317,30 @@ async function loadSettings() {
       <input type="checkbox" id="n-sugg" ${s.notifications.notify_on.stop_suggestions ? "checked" : ""}><label for="n-sugg">stop suggestions</label>
       <input type="checkbox" id="n-health" ${s.notifications.notify_on.health ? "checked" : ""}><label for="n-health">health verdicts</label>
       <input type="checkbox" id="n-scans" ${s.notifications.notify_on.scans ? "checked" : ""}><label for="n-scans">scans & new recs</label>
-      <input type="checkbox" id="n-brief" ${s.notifications.notify_on.briefing ? "checked" : ""}><label for="n-brief">daily briefing</label></div>
+      <input type="checkbox" id="n-brief" ${s.notifications.notify_on.briefing ? "checked" : ""}><label for="n-brief">daily briefing</label>
+      <input type="checkbox" id="n-custom" ${s.notifications.notify_on.custom_alerts !== false ? "checked" : ""}><label for="n-custom">custom alert rules</label></div>
+    <div class="frow check"><input type="checkbox" id="n-quiet" ${s.notifications.quiet_hours && s.notifications.quiet_hours.enabled ? "checked" : ""}><label for="n-quiet"><b>Quiet hours</b> <span class="hint">(webhooks pause; crossed stops still break through)</span></label>
+      <label style="width:auto">from</label><input type="number" class="short" id="n-quiet-start" min="0" max="23" value="${(s.notifications.quiet_hours && s.notifications.quiet_hours.start_hour) ?? 22}">
+      <label style="width:auto">to</label><input type="number" class="short" id="n-quiet-end" min="0" max="23" value="${(s.notifications.quiet_hours && s.notifications.quiet_hours.end_hour) ?? 7}"></div>
     <div class="save-row"><button class="primary" id="save-notif">Save</button><button class="ghost" id="test-notif">Send test</button><span id="note-notif"></span></div>
+    <div class="hint" style="margin-top:14px"><b>Alert rules</b> — "tell me when…", evaluated every ~5 minutes. Delivery <i>digest</i> folds hits into the daily briefing instead of buzzing. (The advisor can manage these too: "ping me if BTC breaks 70k".)</div>
+    <div id="rules-list"></div>
+    <div class="frow" style="margin-top:6px">
+      <select id="rule-type">
+        <option value="price_above">price above</option>
+        <option value="price_below">price below</option>
+        <option value="pct_move_day">daily move &gt; %</option>
+        <option value="rec_entry_zone">rec enters entry zone</option>
+        <option value="earnings_upcoming">earnings upcoming (positions)</option>
+        <option value="macro_event_soon">macro event soon</option>
+        <option value="figure_filing">figure files a trade</option>
+        <option value="portfolio_drawdown">portfolio drawdown &gt; %</option>
+        <option value="provider_degraded">data source degraded</option>
+      </select>
+      <span id="rule-params"></span>
+      <button id="rule-add" class="ghost">＋ Add rule</button>
+      <span class="hint" id="rules-note"></span>
+    </div>
   </div>
 
   <div class="sform" id="sf-prov">
@@ -1408,7 +1481,7 @@ async function loadSettings() {
       const pick = (prefix, keysList) => Object.fromEntries(keysList.map((k) => [k, $(prefix + k).checked]));
       await api("/api/settings/view", { method: "PUT", body: JSON.stringify({
         tabs: pick("v-tab-", ["recommendations", "charts", "watchlist", "trades", "performance"]),
-        dashboard: pick("v-dash-", ["briefing", "sentiment", "success", "latest_recs", "headlines", "activity"]),
+        dashboard: pick("v-dash-", ["briefing", "sentiment", "success", "latest_recs", "headlines", "figures", "activity"]),
         performance: pick("v-perf-", ["rec_performance", "your_trades", "equity", "calibration", "backtest", "strategy_lab"]),
       }) });
       await loadAppSettings(); applyView();
@@ -1418,13 +1491,72 @@ async function loadSettings() {
   $("save-notif").addEventListener("click", async () => {
     try {
       await api("/api/settings/notifications", { method: "PUT", body: JSON.stringify({
+        quiet_hours: { enabled: $("n-quiet").checked, start_hour: Number($("n-quiet-start").value), end_hour: Number($("n-quiet-end").value) },
         browser: $("n-browser").checked, webhook_url: $("n-webhook").value,
-        notify_on: { stops_targets: $("n-stops").checked, stop_suggestions: $("n-sugg").checked, health: $("n-health").checked, scans: $("n-scans").checked, briefing: $("n-brief").checked },
+        notify_on: { stops_targets: $("n-stops").checked, stop_suggestions: $("n-sugg").checked, health: $("n-health").checked, scans: $("n-scans").checked, briefing: $("n-brief").checked, custom_alerts: $("n-custom").checked },
       }) });
       if ($("n-browser").checked && window.Notification && Notification.permission === "default") Notification.requestPermission();
       note("note-notif", "Saved ✓"); loadAppSettings();
     } catch (e) { note("note-notif", e.message, false); }
   });
+  // --- alert-rules editor ("tell me when…") ---
+  const RULE_FIELDS = {
+    price_above: [["symbol", "text", "BTC-USD / NVDA"], ["level", "number", "level"]],
+    price_below: [["symbol", "text", "BTC-USD / NVDA"], ["level", "number", "level"]],
+    pct_move_day: [["scope", "select", "positions,watchlist,symbol"], ["symbol", "text", "symbol (if scope=symbol)"], ["threshold", "number", "%"]],
+    rec_entry_zone: [],
+    earnings_upcoming: [["days", "number", "days"]],
+    macro_event_soon: [["days", "number", "days"]],
+    figure_filing: [["name", "text", "e.g. Pelosi"]],
+    portfolio_drawdown: [["threshold_pct", "number", "%"]],
+    provider_degraded: [],
+  };
+  let rulesCache = [];
+  function renderRuleParams() {
+    const t = $("rule-type").value;
+    $("rule-params").innerHTML = (RULE_FIELDS[t] || []).map(([k, kind, ph]) =>
+      kind === "select"
+        ? `<select data-rp="${k}">${ph.split(",").map((o) => `<option>${o}</option>`).join("")}</select>`
+        : `<input data-rp="${k}" type="${kind}" step="any" placeholder="${ph}" class="short-in" style="width:140px">`
+    ).join(" ");
+  }
+  async function loadRules() {
+    try {
+      const d = await api("/api/alerts");
+      rulesCache = d.rules || [];
+      $("rules-list").innerHTML = rulesCache.length ? `<table class="grid"><thead><tr><th>Rule</th><th>On</th><th>Delivery</th><th>Cooldown (min)</th><th></th></tr></thead>
+        <tbody>${rulesCache.map((r, i) => `<tr>
+          <td>${esc(r.label || r.type)}</td>
+          <td><input type="checkbox" data-ren="${i}" ${r.enabled !== false ? "checked" : ""}></td>
+          <td><select data-rdel="${i}"><option ${r.delivery !== "digest" ? "selected" : ""}>instant</option><option ${r.delivery === "digest" ? "selected" : ""}>digest</option></select></td>
+          <td><input type="number" data-rcd="${i}" class="short" value="${r.cooldown_min}"></td>
+          <td><button class="ghost small" data-rx="${i}" title="Delete rule">✖</button></td></tr>`).join("")}</tbody></table>`
+        : '<div class="hint">No rules yet — add one below, or ask the advisor.</div>';
+      const push = async () => {
+        try { await api("/api/alerts", { method: "PUT", body: JSON.stringify({ rules: rulesCache }) }); note("rules-note", "Saved ✓"); }
+        catch (e) { note("rules-note", e.message, false); }
+        loadRules();
+      };
+      document.querySelectorAll("[data-rx]").forEach((b) => b.addEventListener("click", () => { rulesCache.splice(Number(b.dataset.rx), 1); push(); }));
+      document.querySelectorAll("[data-ren]").forEach((b) => b.addEventListener("change", () => { rulesCache[Number(b.dataset.ren)].enabled = b.checked; push(); }));
+      document.querySelectorAll("[data-rdel]").forEach((b) => b.addEventListener("change", () => { rulesCache[Number(b.dataset.rdel)].delivery = b.value; push(); }));
+      document.querySelectorAll("[data-rcd]").forEach((b) => b.addEventListener("change", () => { rulesCache[Number(b.dataset.rcd)].cooldown_min = Number(b.value) || 240; push(); }));
+    } catch (_) {}
+  }
+  $("rule-type").addEventListener("change", renderRuleParams);
+  renderRuleParams();
+  $("rule-add").addEventListener("click", async () => {
+    const params = {};
+    document.querySelectorAll("[data-rp]").forEach((el) => { if (el.value !== "") params[el.dataset.rp] = el.type === "number" ? Number(el.value) : el.value; });
+    try {
+      rulesCache.push({ type: $("rule-type").value, params });
+      await api("/api/alerts", { method: "PUT", body: JSON.stringify({ rules: rulesCache }) });
+      note("rules-note", "Rule added ✓");
+    } catch (e) { rulesCache.pop(); note("rules-note", e.message, false); }
+    loadRules();
+  });
+  loadRules();
+
   $("test-notif").addEventListener("click", async () => {
     note("note-notif", "sending…");
     try {
@@ -1622,7 +1754,7 @@ chatText.addEventListener("keydown", (e) => {
 /* ---------- view visibility: user-chosen tabs/cards (display-only) ---------- */
 const VIEW_MAP = {
   tabs: { recommendations: "recs", charts: "charts", watchlist: "watchlist", trades: "trades", performance: "performance" },
-  dashboard: { briefing: "card-briefing", sentiment: "card-sentiment", success: "card-success", latest_recs: "card-latest", headlines: "card-news", activity: "card-events" },
+  dashboard: { briefing: "card-briefing", sentiment: "card-sentiment", success: "card-success", latest_recs: "card-latest", headlines: "card-news", figures: "card-figures", activity: "card-events" },
   performance: { rec_performance: "card-perf-recs", your_trades: "card-perf-trades", equity: "card-perf-equity", calibration: "card-perf-cal", backtest: "card-perf-bt", strategy_lab: "card-perf-lab" },
 };
 function applyView() {

@@ -143,6 +143,14 @@ const TOOL_DEFS = [
   T("get_prediction", "PROJECTION CONE for a stock or crypto at a horizon (1h 4h 1d 1w 1m 3m 6m 1y): statistically likely price range from realized volatility — quantile bands (p10/p25/p50/p75/p90) that WIDEN with time. This is a probability range, NOT a directional forecast: when you add your directional lean, state it WITH your confidence and always cite the band width honestly (e.g. 'the 90% range at 3 months spans X–Y; my lean is mildly higher because…'). Consider get_analysis + get_news for the qualitative side.",
     { symbol: { type: "string" }, horizon: { type: "string", enum: ["1h", "4h", "1d", "1w", "1m", "3m", "6m", "1y"], description: "default 1m" },
       asset_type: { type: "string", enum: ["stock", "crypto"] } }, ["symbol"]),
+  T("get_politician_trades", "Congressional trading disclosures (Senate + House). Pass name to see one person's recent filings ('Pelosi' works — options plays show in the descriptions); omit for the latest feed + most-active list. HONEST LIMITS to state when relevant: disclosures lag 30-45 days by law, amounts are ranges not exact counts, and crypto is essentially absent (BTC-ETF tickers at best). Needs the user's free FMP key.",
+    { name: { type: "string", description: "politician name or part of it" } }),
+  T("get_insider_trades", "Company-insider (SEC Form 4) filings for one stock — CEO/founder/officer buys and sells with a buy/sell summary. May be unavailable on the user's FMP tier (returns a note, not an error).",
+    { symbol: { type: "string" } }, ["symbol"]),
+  T("manage_alerts", "The user's notification RULES ('tell me when…'), delivered via their existing channels. action 'list' | 'add' | 'remove'. Types + params: price_above/price_below {symbol, level}; pct_move_day {scope: symbol|watchlist|positions, symbol?, threshold}; rec_entry_zone {}; earnings_upcoming {days}; macro_event_soon {days}; figure_filing {name}; portfolio_drawdown {threshold_pct}; provider_degraded {}. Optional: cooldown_min (default 240), delivery 'instant'|'digest' (digest = folded into the daily briefing instead of buzzing). 'Ping me if BTC breaks 70k' → add price_above {symbol:'BTC-USD', level:70000}. Confirm before removing.",
+    { action: { type: "string", enum: ["list", "add", "remove"] },
+      rule: { type: "object", description: "for add: {type, params, cooldown_min?, delivery?}" },
+      id: { type: "string", description: "for remove" } }, ["action"]),
   T("manage_memory", "Durable memory across conversations. action 'add' saves a short note (stable user preferences, goals, standing context — e.g. 'prefers 3-6 month holds', 'wants out of airlines'); 'remove' deletes by id; 'list' shows all. Your current notes are already in the system prompt. Save sparingly — only stable, genuinely useful facts.",
     { action: { type: "string", enum: ["add", "remove", "list"] }, note: { type: "string" }, id: { type: "string" } }, ["action"]),
 ];
@@ -431,6 +439,40 @@ async function execTool(name, args = {}) {
       return { symbol: a.display, asset_type: a.asset_type, horizon: cone.horizon, price: cone.price,
         at_horizon: cone.at_horizon, band_width_pct: cone.band_width_pct, params: cone.params, note: cone.note };
     }
+    case "get_politician_trades": {
+      const whales2 = require("../providers/whales");
+      if (args.name) {
+        const trades = await whales2.politicianTrades(args.name);
+        return trades.length ? { name: args.name, trades: trades.slice(0, 25), lag_note: "disclosures lag 30-45 days; amounts are ranges" }
+          : { note: `no recent filings matching "${args.name}" in the current window — try get_politician_trades with no name to see who's active (needs the FMP key)` };
+      }
+      const [people, feed] = await Promise.all([whales2.politicians(), whales2.congressFeed()]);
+      if (!people.length) return { note: "congressional data needs the user's free FMP key — Settings → Data feeds" };
+      return { most_active: people.slice(0, 15), latest: feed.slice(0, 20), lag_note: "disclosures lag 30-45 days; amounts are ranges; crypto essentially absent" };
+    }
+    case "get_insider_trades": return await require("../providers/whales").insiderTrades(args.symbol);
+    case "manage_alerts": {
+      const alerts = require("../engine/alerts");
+      const rules = await alerts.listRules();
+      switch (args.action) {
+        case "list": return rules.map((r) => ({ id: r.id, label: alerts.label(r), type: r.type, params: r.params, enabled: r.enabled, delivery: r.delivery, cooldown_min: r.cooldown_min }));
+        case "add": {
+          const v = alerts.validateRule(args.rule || {});
+          if (rules.some((r) => r.id === v.id)) return { error: "an identical rule already exists" };
+          rules.push(v);
+          await alerts.saveRules(rules);
+          return { ok: true, added: alerts.label(v), id: v.id, note: "Evaluated every ~5 minutes; fires through the feed, browser, and webhook (per the user's gates)." };
+        }
+        case "remove": {
+          const i = rules.findIndex((r) => r.id === String(args.id));
+          if (i < 0) return { error: "no rule with id " + args.id + " — use action:list first" };
+          const [gone] = rules.splice(i, 1);
+          await alerts.saveRules(rules);
+          return { ok: true, removed: alerts.label(gone) };
+        }
+        default: return { error: "unknown alerts action" };
+      }
+    }
     case "get_economic_calendar": return await require("../providers/calendar").economicCalendar(args.days || 7);
     case "manage_memory": {
       const notes = await loadNotes();
@@ -470,7 +512,7 @@ HOW TO WORK:
 - USE YOUR TOOLS. Never guess a price, indicator value, or portfolio fact — fetch it. For "what do you think of X?" call get_analysis (and usually get_news + get_quote) first. For "X vs Y" use compare_symbols.
 - STOCKS AND CRYPTO are both first-class. get_quote/get_analysis/get_news accept either ("NVDA", "BTC", "bitcoin", "SOL"...) — pass asset_type to disambiguate colliding tickers. Options are stock-only; smart-money (congress/13F) is stock-only; get_crypto_universe lists the top coins.
 - Respect the user's preferences (get_preferences) — asset classes, risk tolerance (currently: ${s.preferences.risk.risk_tolerance}), options comfort${s.preferences.risk.allow_shorts === false ? ", and the user does NOT short — long ideas only (save_recommendation will reject side:'sell')" : ""}. Don't suggest what they've excluded.
-- REAL ENGINES over ad-hoc opinion: "should I still hold X?" → check_position_health; "is that idea still good?" → revalidate_recommendation; "do my thresholds actually work?" → run_backtest; "am I too concentrated?" → get_portfolio_concentration; "anything big this week?" → get_economic_calendar; "what's a good options play on X?" → suggest_options_play (chain-validated, premium-denominated${s.preferences.options.enabled ? "" : " — currently DISABLED in the user's preferences"}); "test MY strategy: …" → run_strategy (show the compiled spec back, then critique the results yourself); "where will X be in 3 months?" → get_prediction (a probability cone — give your lean WITH confidence, never as certainty).
+- REAL ENGINES over ad-hoc opinion: "should I still hold X?" → check_position_health; "is that idea still good?" → revalidate_recommendation; "do my thresholds actually work?" → run_backtest; "am I too concentrated?" → get_portfolio_concentration; "anything big this week?" → get_economic_calendar; "what's a good options play on X?" → suggest_options_play (chain-validated, premium-denominated${s.preferences.options.enabled ? "" : " — currently DISABLED in the user's preferences"}); "test MY strategy: …" → run_strategy (show the compiled spec back, then critique the results yourself); "where will X be in 3 months?" → get_prediction (a probability cone — give your lean WITH confidence, never as certainty); "what did Pelosi buy?" → get_politician_trades; "are insiders buying X?" → get_insider_trades; "ping me when/if …" → manage_alerts (a real rule, evaluated every ~5 min).
 - When you recommend a trade idea, give the full structure: entry zone, stop loss, laddered targets with sell percentages, rough time horizon, and WHY — grounded in the data you fetched.
 - When the user asks you to CREATE/LOG/TRACK a trade idea, you MUST call save_recommendation — that is the ONLY way an idea reaches the Recommendations tab and gets tracked. NEVER claim an idea is saved or "being tracked" unless the tool returned saved:true. If validation rejects it, fix the levels (usually the reward:risk ratio) and try once more, or tell the user why it can't stand.
 - WRITE ACTIONS need consent: confirm with the user before manage_watchlist remove and ALWAYS before update_trade (state the exact new levels first). Never claim a write happened unless the tool returned ok:true.
