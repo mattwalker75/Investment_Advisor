@@ -13,7 +13,7 @@ const GATES = {
   stop_suggest: "stop_suggestions",
   health: "health",
   scan: "scans", rec_new: "scans", rec_expired: "scans",
-  briefing: "briefing",
+  briefing: "briefing", weekly_review: "briefing",
   alert_rule: "custom_alerts",   // the notification-rules engine (digest hits never gate in)
   strategy_signal: "custom_alerts",   // live strategy-screener signals
 };

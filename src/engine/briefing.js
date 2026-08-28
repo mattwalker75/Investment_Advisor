@@ -73,4 +73,57 @@ async function latest() {
   return row ? { at: Number(row.at), text: row.message } : null;
 }
 
-module.exports = { run, latest };
+// ---- Weekly AI review: how it's GOING, not just what's happening. ----
+async function gatherWeekly() {
+  const week = Date.now() - 7 * 86400000;
+  const recs = await db.all("SELECT symbol, side, asset_type, status, confidence, created_at, outcome, inputs FROM recommendations");
+  const parsed = recs.map((r) => ({ ...r, o: J(r.outcome, {}) || {}, inp: J(r.inputs, {}) || {} }));
+  const madeThisWeek = parsed.filter((r) => Number(r.created_at) > week);
+  const finishedThisWeek = parsed.filter((r) =>
+    (["stopped", "target_hit"].includes(r.status) || (r.status === "closed" && r.o.result === "expired_settled"))
+    && r.o.pnl_pct != null && Number(r.o.exit_at || 0) > week);
+  const closedTrades = await db.all("SELECT symbol, pnl, pnl_pct, closed_at FROM trades WHERE status='closed' AND closed_at > ?", [week]);
+  const eventCounts = await db.all("SELECT type, COUNT(*) AS n FROM events WHERE at > ? GROUP BY type", [week]);
+  const notable = await db.all(`SELECT message FROM events WHERE at > ? AND type IN ('strategy_signal','alert_rule','health') ORDER BY id DESC LIMIT 12`, [week]);
+  const calibration = await require("./recommender").calibrationSummary().catch(() => null);
+  const equity = await require("./portfolio").equityCurves().catch(() => null);
+  return {
+    week_of: new Date(week).toISOString().slice(0, 10),
+    recommendations: {
+      made: madeThisWeek.length,
+      finished: finishedThisWeek.map((r) => ({ symbol: r.symbol, side: r.side, asset_type: r.asset_type, status: r.status, pnl_pct: r.o.pnl_pct, confidence: r.confidence, source: r.inp.source || "scan" })),
+      still_active: parsed.filter((r) => ["open", "tracking"].includes(r.status)).length,
+    },
+    your_closed_trades: closedTrades.map((t) => ({ symbol: t.symbol, pnl: t.pnl, pnl_pct: t.pnl_pct })),
+    event_counts: Object.fromEntries(eventCounts.map((e) => [e.type, e.n])),
+    notable_events: notable.map((e) => e.message),
+    calibration_line: calibration,
+    equity: equity ? { realized: equity.actual.stats, what_if: equity.what_if.stats } : null,
+  };
+}
+
+async function runWeekly(trigger = "manual") {
+  const data = await gatherWeekly();
+  const { content } = await llm.chat([
+    { role: "system", content: `You write the user's WEEKLY TRADING REVIEW for their personal investment advisor tool —
+a candid retrospective, not a pep talk. Markdown, ~300 words max:
+1. **The week** — recommendations made/finished with the real win/loss numbers; call out the best and worst call by name.
+2. **Your trading** — closed trades and their P&L; note anything the user did differently from the system's plan if visible.
+3. **System health** — the confidence-calibration read, strategy signals and alerts that fired, equity vs the what-if curve.
+4. **What I'd change** — 1-2 CONCRETE, candid suggestions grounded in this week's data (a setting, a habit, a strategy tweak). If the sample is tiny, say so instead of inventing lessons.
+Numbers over adjectives. No greetings, no disclaimers.` },
+    { role: "user", content: JSON.stringify(data) },
+  ], { max_tokens: 1400, task: "light" });
+  const text = (content || "").trim();
+  if (!text) throw new Error("empty weekly review from model");
+  await logEvent("weekly_review", "briefing", null, null, text);
+  console.log(`[weekly-review] generated (${trigger}), ${text.length} chars`);
+  return { text };
+}
+
+async function latestWeekly() {
+  const row = await db.get("SELECT at, message FROM events WHERE type='weekly_review' ORDER BY id DESC LIMIT 1");
+  return row ? { at: Number(row.at), text: row.message } : null;
+}
+
+module.exports = { run, latest, runWeekly, latestWeekly };

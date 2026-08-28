@@ -115,6 +115,10 @@ const DEFAULTS = {
     // Daily SQLite backup into data/backups/ (the DB is the whole track record).
     backup_enabled: true,
     backup_keep: 14,             // newest N backups retained
+    // Weekly AI review: a candid retrospective (what fired, what worked, what to change)
+    // generated on the chosen day at briefing_hour.
+    weekly_review_enabled: false,
+    weekly_review_day: 0,        // 0 = Sunday … 6 = Saturday
   },
 
   // --- View: which tabs/cards the UI SHOWS. Display-only — hiding something never

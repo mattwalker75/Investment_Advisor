@@ -108,7 +108,9 @@ async function backupNow(keep = 14) {
   if (dialect !== "sqlite") return { skipped: true, note: "MySQL backend — schedule mysqldump outside the app for backups" };
   if (!sqlite) throw new Error("database not initialized");
   fs.mkdirSync(BACKUP_DIR, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+  // Millisecond stamp: a pre-restore snapshot taken in the same SECOND as the backup
+  // being restored must never collide with (and overwrite) it.
+  const stamp = new Date().toISOString().replace(/[:T.]/g, "-").replace(/Z$/, "");
   const dest = path.join(BACKUP_DIR, `advisor-${stamp}.db`);
   await sqlite.backup(dest);
   const files = fs.readdirSync(BACKUP_DIR).filter((f) => /^advisor-.*\.db$/.test(f)).sort();
@@ -118,6 +120,59 @@ async function backupNow(keep = 14) {
   }
   return { file: path.relative(ROOT, dest), size_bytes: fs.statSync(dest).size, backups_kept: files.length };
 }
+// List available backups, newest first.
+function listBackups() {
+  try {
+    return fs.readdirSync(BACKUP_DIR)
+      .filter((f) => /^advisor-[\w.-]+\.db$/.test(f))
+      .map((f) => {
+        const st = fs.statSync(path.join(BACKUP_DIR, f));
+        return { file: f, size_bytes: st.size, mtime: st.mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch (_) { return []; }
+}
+
+// SQLite integrity check of one backup file (read-only open, PRAGMA quick_check).
+function verifyBackup(file) {
+  const safe = String(file);
+  if (!/^advisor-[\w.-]+\.db$/.test(safe)) throw new Error("invalid backup filename");
+  const full = path.join(BACKUP_DIR, safe);
+  if (!fs.existsSync(full)) throw new Error("backup not found: " + safe);
+  const Database = require("better-sqlite3");
+  const bdb = new Database(full, { readonly: true });
+  try {
+    const r = bdb.pragma("quick_check");
+    const ok = Array.isArray(r) && r.length === 1 && (r[0].quick_check === "ok" || r[0] === "ok");
+    return { file: safe, ok, detail: ok ? "ok" : JSON.stringify(r).slice(0, 200) };
+  } finally { bdb.close(); }
+}
+
+// Restore a backup over the live database (SQLite only). Safety order: verify the
+// SOURCE's integrity → snapshot the CURRENT database → close → copy → reopen.
+// A brief window of in-flight query errors during the swap is expected; the UI
+// reloads afterward.
+async function restoreBackup(file) {
+  if (dialect !== "sqlite") throw new Error("restore supports the SQLite backend");
+  if (!sqlite) throw new Error("database not initialized");
+  const check = verifyBackup(file);
+  if (!check.ok) throw new Error(`backup failed its integrity check (${check.detail}) — not restoring`);
+  const pre = await backupNow(Math.max(14, 2));            // pre-restore snapshot of the CURRENT db
+  const full = path.join(BACKUP_DIR, String(file));
+  const liveFile = sqlite.name;                            // better-sqlite3 exposes the open path
+  sqlite.close();
+  try {
+    for (const suffix of ["-wal", "-shm"]) { try { fs.unlinkSync(liveFile + suffix); } catch (_) {} }
+    fs.copyFileSync(full, liveFile);
+  } finally {
+    const Database = require("better-sqlite3");
+    sqlite = new Database(liveFile);
+    sqlite.pragma("journal_mode = WAL");
+  }
+  await migrate();                                         // an older backup may predate columns
+  return { ok: true, restored: String(file), pre_restore_snapshot: pre.file, note: "Restored. Reload the page; a restart is recommended." };
+}
+
 // Newest backup's mtime (0 when none) — the scheduler uses this to fire once per day.
 function lastBackupAt() {
   try {
@@ -156,7 +211,7 @@ async function close() {
 }
 
 module.exports = {
-  init, all, get, run, upsertSql, backupNow, lastBackupAt, dropAll, close, loadConfig,
+  init, all, get, run, upsertSql, backupNow, lastBackupAt, listBackups, verifyBackup, restoreBackup, dropAll, close, loadConfig,
   get dialect() { return dialect; },
   CONFIG_FILE,
 };

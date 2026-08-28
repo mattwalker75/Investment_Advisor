@@ -34,6 +34,15 @@ router.post("/briefing", async (_req, res) => {
   catch (e) { res.status(502).json({ error: e.message }); }
 });
 
+// ---------- Weekly AI review ----------
+router.get("/review/weekly", async (_req, res) => {
+  res.json((await require("../engine/briefing").latestWeekly()) || {});
+});
+router.post("/review/weekly", async (_req, res) => {
+  try { res.json(await require("../engine/briefing").runWeekly("manual")); }
+  catch (e) { res.status(502).json({ error: e.message }); }
+});
+
 // ---------- Threshold backtester ----------
 router.post("/backtest", async (req, res) => {
   try {

@@ -114,6 +114,19 @@ function start() {
     catch (e) { console.error("[scheduler] briefing failed:", e.message); }
   }, 60 * 1000));
 
+  // Weekly AI review on the configured day at briefing_hour (at most once per 6 days).
+  let lastWeekly = 0;
+  timers.push(setInterval(async () => {
+    const sch = settings.getSync().schedule;
+    if (!sch.weekly_review_enabled) return;
+    const d = new Date();
+    if (d.getDay() !== (sch.weekly_review_day ?? 0) || d.getHours() !== sch.briefing_hour) return;
+    if (Date.now() - lastWeekly < 6 * 24 * 3600 * 1000) return;
+    lastWeekly = Date.now();
+    try { await require("./engine/briefing").runWeekly("scheduled"); }
+    catch (e) { console.error("[scheduler] weekly review failed:", e.message); }
+  }, 60 * 1000));
+
   console.log("[scheduler] started");
 }
 

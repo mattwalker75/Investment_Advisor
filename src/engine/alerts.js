@@ -27,7 +27,8 @@ const { logEvent } = require("../events");
 const KEY = "alert_rules";
 const DIGEST_KEY = "alert_digest_queue";
 const RULE_TYPES = ["price_above", "price_below", "pct_move_day", "rec_entry_zone",
-  "earnings_upcoming", "macro_event_soon", "figure_filing", "portfolio_drawdown", "provider_degraded"];
+  "earnings_upcoming", "macro_event_soon", "figure_filing", "portfolio_drawdown", "provider_degraded",
+  "headline_mention"];
 
 async function listRules() {
   const row = await db.get("SELECT value FROM settings WHERE `key`=?", [KEY]).catch(() => null);
@@ -64,12 +65,20 @@ function validateRule(raw) {
     if (!params.name) throw new Error("figure_filing needs {name} (e.g. \"Pelosi\")");
   } else if (type === "portfolio_drawdown") {
     params.threshold_pct = num(p.threshold_pct, 1, 90, 10);
+  } else if (type === "headline_mention") {
+    params.scope = ["symbol", "positions", "watchlist"].includes(p.scope) ? p.scope : "positions";
+    if (params.scope === "symbol") {
+      params.symbol = String(p.symbol || "").toUpperCase().trim();
+      if (!params.symbol) throw new Error("headline_mention with scope=symbol needs a symbol");
+    }
   }
   return {
     id: raw.id || Date.now().toString(36) + Math.abs((JSON.stringify(params) + type).split("").reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 0)).toString(36),
     type, params,
     enabled: raw.enabled !== false,
-    cooldown_min: Math.round(num(raw.cooldown_min, 5, 10080, 240)),
+    // Headline rules dedupe per headline — a long default cooldown stops a story that
+    // lingers in the 24h window from re-firing.
+    cooldown_min: Math.round(num(raw.cooldown_min, 5, 10080, type === "headline_mention" ? 2880 : 240)),
     delivery: raw.delivery === "digest" ? "digest" : "instant",
     state: raw.state && typeof raw.state === "object" ? raw.state : {},
   };
@@ -87,6 +96,7 @@ function label(rule) {
     case "figure_filing": return `${p.name} files a trade`;
     case "portfolio_drawdown": return `portfolio drawdown > ${p.threshold_pct}%`;
     case "provider_degraded": return "data source degraded";
+    case "headline_mention": return `headline mentions ${p.scope === "symbol" ? p.symbol : "my " + p.scope}`;
     default: return rule.type;
   }
 }
@@ -234,6 +244,22 @@ async function evaluateRules() {
             const cur = ((peak - last) / peak) * 100;
             if (cur >= p.threshold_pct)
               fired += await fire(rule, "dd", `Portfolio is ${cur.toFixed(1)}% off its peak (your ${p.threshold_pct}% drawdown rule)`);
+          }
+          break;
+        }
+        case "headline_mention": {
+          const news = require("../providers/news");
+          const heads = await news.headlines(24, 40).catch(() => []);
+          if (!heads.length) break;
+          let subjects;
+          if (p.scope === "symbol") subjects = [{ sym: p.symbol, name: "" }];
+          else if (p.scope === "watchlist") subjects = (await db.all("SELECT symbol, name FROM watchlist").catch(() => [])).map((w) => ({ sym: w.symbol, name: w.name || "" }));
+          else subjects = (await db.all("SELECT DISTINCT symbol FROM trades WHERE status='open'").catch(() => [])).map((t) => ({ sym: t.symbol, name: "" }));
+          for (const s2 of subjects) {
+            const matches = news.matching(heads, String(s2.sym).replace(/-USD$/, ""), s2.name);
+            for (const h of matches.slice(0, 3)) {
+              fired += await fire(rule, `${s2.sym}|${news.titleKey(h.title)}`, `📰 ${s2.sym} in the news: "${h.title}" (${h.source || "feed"})`);
+            }
           }
           break;
         }

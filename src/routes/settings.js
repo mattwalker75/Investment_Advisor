@@ -115,6 +115,22 @@ router.post("/db/backup", async (_req, res) => {
   try { res.json(await db.backupNow((await settings.getAll()).schedule.backup_keep || 14)); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
+// List backups; ?verify=1 runs a SQLite integrity check on each.
+router.get("/db/backups", (req, res) => {
+  try {
+    const list = db.listBackups();
+    if (req.query.verify) for (const b of list) {
+      try { b.verified = db.verifyBackup(b.file).ok; } catch (_) { b.verified = false; }
+    }
+    res.json({ backups: list, dialect: db.dialect });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Restore a backup over the live database: source verified first, current DB
+// snapshotted, then swapped. The UI reloads afterward.
+router.post("/db/restore", async (req, res) => {
+  try { res.json(await db.restoreBackup(String((req.body && req.body.file) || ""))); }
+  catch (e) { res.status(422).json({ error: e.message }); }
+});
 
 // Send a test notification. A URL from the form is tested as an OVERRIDE — it is never
 // persisted here (a failed test used to leave the broken URL saved as the webhook).

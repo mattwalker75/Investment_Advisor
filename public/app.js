@@ -150,6 +150,17 @@ async function loadBriefing() {
     if (b && b.text) { $("briefing-body").innerHTML = mdLite(b.text); $("briefing-when").textContent = ago(b.at); }
   } catch (_) {}
 }
+$("weekly-run").addEventListener("click", async () => {
+  $("weekly-run").disabled = true; $("briefing-when").textContent = "writing the weekly review…";
+  try {
+    // show the last one instantly if it's fresh (<20h), else generate
+    const last = await api("/api/review/weekly").catch(() => ({}));
+    const r = last.text && Date.now() - last.at < 20 * 3600 * 1000 ? last : await api("/api/review/weekly", { method: "POST" });
+    $("briefing-body").innerHTML = mdLite(r.text);
+    $("briefing-when").textContent = "weekly review · " + (r.at ? ago(r.at) : "just now");
+  } catch (e) { $("briefing-when").textContent = "✗ " + e.message; }
+  finally { $("weekly-run").disabled = false; }
+});
 $("briefing-run").addEventListener("click", async () => {
   $("briefing-run").disabled = true; $("briefing-when").textContent = "generating…";
   try { const r = await api("/api/briefing", { method: "POST" }); $("briefing-body").innerHTML = mdLite(r.text); $("briefing-when").textContent = "just now"; }
@@ -1279,6 +1290,7 @@ async function loadSettings() {
     </div>
     <div class="save-row"><button class="primary" id="save-db">Save</button>
       <button class="ghost" id="db-backup-now" title="Snapshot the database into data/backups/ right now">💾 Back up now</button><span id="note-db"></span></div>
+    <div id="db-backups"></div>
   </div>
 
   <div class="sform" id="sf-prefs">
@@ -1349,6 +1361,8 @@ async function loadSettings() {
       <label style="width:auto">at hour</label><input type="number" class="short" id="sc-briefhour" min="0" max="23" value="${s.schedule.briefing_hour}"></div>
     <div class="frow check"><input type="checkbox" id="sc-backup" ${s.schedule.backup_enabled !== false ? "checked" : ""}><label for="sc-backup"><b>Daily database backup</b> <span class="hint">(SQLite → data/backups/)</span></label>
       <label style="width:auto">keep</label><input type="number" class="short" id="sc-backupkeep" min="1" max="60" value="${s.schedule.backup_keep ?? 14}"></div>
+    <div class="frow check"><input type="checkbox" id="sc-weekly" ${s.schedule.weekly_review_enabled ? "checked" : ""}><label for="sc-weekly"><b>Weekly AI review</b> <span class="hint">(candid retrospective at briefing hour)</span></label>
+      <label style="width:auto">on</label><select id="sc-weeklyday">${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map((d, i) => `<option value="${i}" ${(s.schedule.weekly_review_day ?? 0) === i ? "selected" : ""}>${d}</option>`).join("")}</select></div>
     <div class="save-row"><button class="primary" id="save-sched">Save</button><span id="note-sched"></span></div>
   </div>
 
@@ -1397,6 +1411,7 @@ async function loadSettings() {
         <option value="figure_filing">figure files a trade</option>
         <option value="portfolio_drawdown">portfolio drawdown &gt; %</option>
         <option value="provider_degraded">data source degraded</option>
+        <option value="headline_mention">headline mentions…</option>
       </select>
       <span id="rule-params"></span>
       <button id="rule-add" class="ghost">＋ Add rule</button>
@@ -1489,8 +1504,38 @@ async function loadSettings() {
     try {
       const r = await api("/api/db/backup", { method: "POST" });
       note("note-db", r.skipped ? r.note : `✓ ${r.file} (${Math.round(r.size_bytes / 1024)} KB, ${r.backups_kept} kept)`);
+      loadDbBackups();
     } catch (e) { note("note-db", "✗ " + e.message, false); }
   });
+  // Backups list + one-click verified restore (current DB snapshotted first).
+  async function loadDbBackups() {
+    try {
+      const d = await api("/api/db/backups?verify=1");
+      if (d.dialect !== "sqlite" || !(d.backups || []).length) { $("db-backups").innerHTML = ""; return; }
+      $("db-backups").innerHTML = `<div class="hint" style="margin-top:8px"><b>Backups</b> — each verified with a SQLite integrity check; Restore snapshots the current database first.</div>
+        <table class="grid"><thead><tr><th>Backup</th><th>Size</th><th>Integrity</th><th></th></tr></thead>
+        <tbody>${d.backups.map((b) => `<tr>
+          <td class="mono">${esc(b.file)}</td>
+          <td class="hint">${Math.round(b.size_bytes / 1024)} KB</td>
+          <td>${b.verified ? '<span class="up">✓ ok</span>' : '<span class="down">✗ FAILED</span>'}</td>
+          <td>${b.verified ? `<button class="ghost small" data-restore="${esc(b.file)}">↩ Restore</button>` : ""}</td></tr>`).join("")}</tbody></table>`;
+      document.querySelectorAll("[data-restore]").forEach((btn) => btn.addEventListener("click", async () => {
+        const file = btn.dataset.restore;
+        if (!await confirmDialog({
+          title: "Restore " + file + "?",
+          message: "The CURRENT database (all trades, recommendations, settings) is snapshotted first, then <b>replaced</b> by this backup. The page reloads afterward; a restart is recommended.",
+          confirmText: "Restore backup",
+        })) return;
+        note("note-db", "restoring…");
+        try {
+          const r = await api("/api/db/restore", { method: "POST", body: JSON.stringify({ file }) });
+          note("note-db", `✓ restored (pre-restore snapshot: ${r.pre_restore_snapshot}) — reloading…`);
+          setTimeout(() => location.reload(), 1800);
+        } catch (e) { note("note-db", "✗ " + e.message, false); }
+      }));
+    } catch (_) { $("db-backups").innerHTML = ""; }
+  }
+  loadDbBackups();
   $("save-db").addEventListener("click", async () => {
     try {
       const body = { dialect: $("db-dialect").value };
@@ -1551,6 +1596,7 @@ async function loadSettings() {
         rec_expiry_days: Number($("sc-expiry").value), health_check_hours: Number($("sc-health").value),
         briefing_enabled: $("sc-brief").checked, briefing_hour: Number($("sc-briefhour").value),
         backup_enabled: $("sc-backup").checked, backup_keep: Number($("sc-backupkeep").value) || 14,
+        weekly_review_enabled: $("sc-weekly").checked, weekly_review_day: Number($("sc-weeklyday").value) || 0,
       }) });
       note("note-sched", "Saved ✓");
     } catch (e) { note("note-sched", e.message, false); }
@@ -1589,6 +1635,7 @@ async function loadSettings() {
     figure_filing: [["name", "text", "e.g. Pelosi"]],
     portfolio_drawdown: [["threshold_pct", "number", "%"]],
     provider_degraded: [],
+    headline_mention: [["scope", "select", "positions,watchlist,symbol"], ["symbol", "text", "symbol (if scope=symbol)"]],
   };
   let rulesCache = [];
   function renderRuleParams() {

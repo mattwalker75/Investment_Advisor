@@ -22,6 +22,13 @@ stubModule("providers/yahoo.js", {
   search: async () => [],
   providerHealth: () => market.health,
 });
+const newsFeed = { heads: [] };
+stubModule("providers/news.js", {
+  headlines: async () => newsFeed.heads,
+  matching: (all, symbol) => all.filter((h) => new RegExp(`\\b${symbol}\\b`, "i").test(h.title)),
+  titleKey: (t) => String(t).toLowerCase().replace(/\W+/g, "").slice(0, 40),
+  saveOverlay: async () => {},
+});
 const figures = { trades: [] };
 stubModule("providers/whales.js", {
   politicianTrades: async () => figures.trades,
@@ -120,6 +127,21 @@ test("digest delivery queues for the briefing instead of alerting, and drains on
   assert.match(q[0].message, /degraded/i);
   assert.deepStrictEqual(await alerts.drainDigest(), [], "queue drains once");
   market.health.yahoo_cooling_down = false;
+});
+
+test("headline_mention: fires per matching headline on open positions, dedupes by title", async () => {
+  await db.run("INSERT INTO trades (rec_id,created_at,asset_type,symbol,side,qty,entry_price,entry_at,targets,status) VALUES (NULL,?,'stock','NWSCO','buy',1,50,?,'[]','open')", [Date.now(), Date.now()]);
+  newsFeed.heads = [{ title: "NWSCO announces breakthrough", source: "wire" }, { title: "Unrelated market story", source: "wire" }];
+  await alerts.saveRules([alerts.validateRule({ type: "headline_mention", params: { scope: "positions" } })]);
+  const first = await alerts.evaluateRules();
+  assert.strictEqual(first.fired, 1, "one matching headline fires once");
+  const again = await alerts.evaluateRules();
+  assert.strictEqual(again.fired, 0, "same headline never re-fires");
+  newsFeed.heads.push({ title: "NWSCO CEO steps down", source: "wire" });
+  const second = await alerts.evaluateRules();
+  assert.strictEqual(second.fired, 1, "a NEW headline fires");
+  await db.run("DELETE FROM trades WHERE symbol='NWSCO'");
+  newsFeed.heads = [];
 });
 
 test("disabled rules are skipped but preserved", async () => {
