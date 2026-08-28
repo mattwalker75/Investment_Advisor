@@ -315,6 +315,13 @@ async function loadRecs() {
       if (!await confirmDialog({ title: `Dismiss ${r.symbol}?`, message: "The idea closes as <b>dismissed</b> and stops being tracked. This can't be undone.", confirmText: "Dismiss" })) return;
       await api(`/api/recommendations/${r.id}/dismiss`, { method: "POST" }); loadRecs();
     });
+    const oc = el.querySelector(".order-copy");
+    if (oc) oc.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try { await navigator.clipboard.writeText(orderTicket(r)); oc.textContent = "✓ copied"; }
+      catch (_) { oc.textContent = "✗ clipboard blocked"; }
+      setTimeout(() => { oc.textContent = "📋 Order"; }, 2500);
+    });
     const ch = el.querySelector(".to-chart");
     if (ch) ch.addEventListener("click", (e) => { e.stopPropagation(); openChart(r.asset_type === "crypto" && !r.symbol.includes("-") ? r.symbol + "-USD" : r.symbol, { entry_low: r.entry_low, entry_high: r.entry_high, stop_loss: r.stop_loss, targets: r.targets }); });
     const cp = el.querySelector(".complete-btn");
@@ -339,6 +346,22 @@ async function loadRecs() {
 function tradeClass(r) { return r.options_play ? "option" : r.asset_type === "crypto" ? "crypto" : "stock"; }
 const TRADE_CLASS_LABEL = { stock: "📈 STOCK", option: "🧾 OPTION", crypto: "₿ CRYPTO" };
 function assetBadge(r) { const c = tradeClass(r); return `<span class="asset-badge ${c}">${TRADE_CLASS_LABEL[c]}</span>`; }
+// Broker-ready order text for a recommendation, sized from the user's risk settings.
+// Closes the last manual gap between a rec and the broker — paste, review, submit.
+function orderTicket(r) {
+  const ps = positionSize(r);
+  const qty = ps ? ps.qty : "‹qty›";
+  const tLines = (r.targets || []).map((t) => `${fmtP(t.price)} (${t.sell_pct}%)`).join(" / ");
+  if (r.asset_type === "option") {
+    const p = r.options_play || {};
+    const leg = `${(p.strikes || []).join("/")}${/put/.test(p.strategy || "") ? "P" : "C"}`;
+    const verb = p.credit ? "SELL (open)" : "BUY (open)";
+    return `${verb} ${qty} contract(s) ${r.symbol} ${leg} exp ${p.expiry} [${(p.strategy || "").replace(/_/g, " ")}] · net limit ${fmtP(r.entry_high)} (zone ${fmtP(r.entry_low)}–${fmtP(r.entry_high)}) · premium stop ${fmtP(r.stop_loss)} · premium targets: ${tLines}`;
+  }
+  const verb = r.side === "sell" ? "SELL SHORT" : "BUY";
+  return `${verb} ${qty} ${r.symbol} · limit ${fmtP(r.side === "sell" ? r.entry_low : r.entry_high)} (zone ${fmtP(r.entry_low)}–${fmtP(r.entry_high)}) · stop ${fmtP(r.stop_loss)} GTC · targets: ${tLines}`;
+}
+
 function recCard(r) {
   const outcome = r.outcome || {};
   const pnl = outcome.pnl_pct;
@@ -412,6 +435,7 @@ function recCard(r) {
       ${outcome.entry_price ? `<div class="hint">shadow entry ${fmtP(outcome.entry_price)} ${outcome.targets_hit && outcome.targets_hit.length ? "· targets hit: " + outcome.targets_hit.map((p) => fmtP(p)).join(", ") : ""} ${outcome.last_price ? "· last " + fmtP(outcome.last_price) : ""}</div>` : ""}
       <div class="rec-actions">
         <button class="ghost to-chart">📈 Chart</button>
+        ${["open", "tracking"].includes(r.status) ? '<button class="ghost order-copy" title="Copy a broker-ready order ticket (sized from your risk settings)">📋 Order</button>' : ""}
         ${!r.taken && !isOpt && ["open", "tracking"].includes(r.status) ? '<button class="take">✅ I took this trade</button>' : ""}
         ${!r.taken && r.options_play && ["open", "tracking"].includes(r.status) ? '<button class="take take-option" style="background:linear-gradient(180deg,#8b5cf6,#6d28d9)">🧾 Took the option</button>' : ""}
         ${["open", "tracking"].includes(r.status) ? '<button class="ghost complete-btn" title="Mark this idea finished — a tracking idea is graded at the current price">✔ Complete</button>' : ""}
