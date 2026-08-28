@@ -780,7 +780,69 @@ function mkChart(el, h) {
     autoSize: true,
   });
 }
-function ensureChart() { if (!chart) { chart = mkChart($("chart-main")); candleSeries = chart.addCandlestickSeries({ upColor: "#34d399", downColor: "#f87171", borderVisible: false, wickUpColor: "#34d399", wickDownColor: "#f87171" }); loadChart(curSymbol); } }
+function ensureChart() {
+  if (chart) return;
+  chart = mkChart($("chart-main"));
+  candleSeries = chart.addCandlestickSeries({ upColor: "#34d399", downColor: "#f87171", borderVisible: false, wickUpColor: "#34d399", wickDownColor: "#f87171" });
+  // User-drawn levels: in ✏ mode, a click drops a horizontal line at that price.
+  chart.subscribeClick((param) => {
+    if (!drawMode || !param.point || !chartData) return;
+    const price = candleSeries.coordinateToPrice(param.point.y);
+    if (price == null || !isFinite(price)) return;
+    const p = +Number(price).toFixed(price >= 100 ? 2 : 4);
+    const saved = userLevels();
+    saved.push(p);
+    localStorage.setItem("adv_levels_" + curSymbol, JSON.stringify(saved));
+    drawUserLevels();
+  });
+  loadChart(curSymbol);
+}
+
+/* ---------- chart tools: relative comparison + user-drawn levels ---------- */
+let compareSeries = null, compareSym = null, drawMode = false, userLines = [];
+const userLevels = () => { try { return JSON.parse(localStorage.getItem("adv_levels_" + curSymbol)) || []; } catch (_) { return []; } };
+function drawUserLevels() {
+  userLines.forEach((l) => { try { candleSeries.removePriceLine(l); } catch (_) {} });
+  userLines = userLevels().map((p) =>
+    candleSeries.createPriceLine({ price: p, color: "#fbbf24", lineWidth: 1, lineStyle: 0, axisLabelVisible: true, title: "level" }));
+}
+// Compare mode: overlay another symbol's closes and flip the price scale to PERCENT so
+// both series read as relative performance from the visible start.
+async function setCompare(sym) {
+  if (compareSeries) { try { chart.removeSeries(compareSeries); } catch (_) {} compareSeries = null; }
+  compareSym = (sym || "").toUpperCase().trim() || null;
+  const PSM = (window.LightweightCharts && LightweightCharts.PriceScaleMode) || { Normal: 0, Percentage: 2 };
+  if (!compareSym) {
+    chart.priceScale("right").applyOptions({ mode: PSM.Normal });
+    $("chart-compare").value = "";
+    return;
+  }
+  try {
+    const d = await api(`/api/chart/${encodeURIComponent(compareSym)}?days=${curDays}`);
+    compareSeries = chart.addLineSeries({ color: "#e879f9", lineWidth: 1.6, priceLineVisible: false, title: d.display || compareSym });
+    compareSeries.setData(d.candles.map((c) => ({ time: c.time, value: c.close })));
+    chart.priceScale("right").applyOptions({ mode: PSM.Percentage });
+    $("chart-info").textContent += ` · vs ${d.display || compareSym} (% scale)`;
+  } catch (e) {
+    compareSym = null;
+    chart.priceScale("right").applyOptions({ mode: PSM.Normal });
+    $("chart-info").textContent = "⚠ compare failed — " + e.message;
+  }
+}
+$("chart-compare").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  setCompare($("chart-compare").value);
+});
+$("chart-drawline").addEventListener("click", () => {
+  drawMode = !drawMode;
+  $("chart-drawline").classList.toggle("on", drawMode);
+  $("chart-main").style.cursor = drawMode ? "crosshair" : "";
+});
+$("chart-clearlines").addEventListener("click", () => {
+  localStorage.removeItem("adv_levels_" + curSymbol);
+  drawUserLevels();
+});
 
 async function loadChart(symbol) {
   curSymbol = symbol.toUpperCase();
@@ -807,6 +869,8 @@ async function loadChart(symbol) {
   const lastLabel = typeof lastBar.time === "string" ? lastBar.time : new Date(lastBar.time * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   $("chart-info").textContent = `${curSymbol} · ${fmtP(latest.price)} · RSI ${latest.rsi ?? "—"} · ${candles.length} bars · last bar ${lastLabel}`;
   drawOverlays();
+  drawUserLevels();                              // restore saved levels for this symbol
+  if (compareSym) setCompare(compareSym);        // re-fetch the comparison at the new symbol/range
 }
 // Draw a trade plan on the chart: entry zone (two dashed cyan lines), stop (red),
 // targets (green). Cleared automatically when the symbol changes without a plan.

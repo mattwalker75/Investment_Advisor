@@ -136,6 +136,10 @@
           <button class="chip" data-ov="rsi">RSI</button>
           <button class="chip" data-ov="macd">MACD</button>
         </div>
+        <input id="chart-compare" placeholder="vs symbol…" class="short-in" style="width:110px" autocomplete="off" spellcheck="false"
+          title="Overlay another symbol for relative comparison — both scale as % change. Enter to apply, empty + Enter to remove.">
+        <button class="chip" id="chart-drawline" title="Click the chart to drop a horizontal price level (saved per symbol)">✏ Level</button>
+        <button class="ghost small" id="chart-clearlines" title="Remove your drawn levels for this symbol">✖ levels</button>
         <span class="hint" id="chart-info"></span>
       </div>
       <div id="chart-main" class="chartbox"></div>
