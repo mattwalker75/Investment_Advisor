@@ -50,6 +50,11 @@ RULES:
   repeat them: skip those symbols unless your idea is MATERIALLY different (opposite side,
   or an entry zone that does not overlap and sits ≥5% away). Prefer fresh symbols.
 - Respect the user's risk tolerance: ${prefs.risk.risk_tolerance}.
+- FUNDAMENTALS: stock candidates may include a fundamentals block (P/E, margins, ROE,
+  leverage, beta). Use it to TEMPER or reinforce the technical thesis — a stretched
+  valuation lowers conviction on a breakout; strong margins and a clean balance sheet
+  support buying a dip. Cite a fundamental only when it materially affects the call;
+  this remains a swing-trade tool, not a value screener.
 ${prefs.risk.allow_shorts !== false
     ? '- side "buy" = long idea. side "sell" = exit/avoid/short signal on that symbol.'
     : '- The user does NOT take short positions: side must ALWAYS be "buy". If a candidate looks bearish, simply OMIT it — never emit a sell idea.'}
@@ -92,6 +97,7 @@ function compactCandidate(c) {
   };
   if (c.smart_money) out.smart_money = c.smart_money;
   if (c.next_earnings) out.next_earnings = c.next_earnings;
+  if (c.fundamentals) out.fundamentals = c.fundamentals;   // already compact (nulls dropped)
   if (c.options_chain) {
     // ≤8 strikes per side nearest the money, essential leg fields only, plus an
     // at-the-money IV read so the model can judge rich vs modest premium.

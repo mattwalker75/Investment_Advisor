@@ -117,6 +117,8 @@ const TOOL_DEFS = [
   T("revalidate_recommendation", "Re-validate an open/tracking recommendation against CURRENT data using the real revalidation engine: verdict valid | adjust (levels updated in place) | withdraw (closed, unless the user has taken the trade). Use for 'is that idea still good?'.",
     { id: { type: "number" } }, ["id"]),
   T("get_portfolio_concentration", "Sector-concentration check across the user's OPEN positions: position counts per sector plus correlated-risk warnings."),
+  T("get_fundamentals", "Valuation/quality snapshot for a STOCK: market cap, beta, P/E, P/S, P/B (TTM), gross/net margins, ROE, debt-to-equity, dividend yield — from the user's FMP key (24h-cached; degrades to a note without the key or on tier limits). Use it to temper technical calls; crypto has no fundamentals.",
+    { symbol: { type: "string" } }, ["symbol"]),
   T("get_portfolio_risk", "The risk panel: total $ lost if EVERY stop hits (no-stop positions count their full value and are flagged; long options cap at premium), % of account, biggest single risk, and per-position risk rows. Use for 'how much am I risking?' / 'review my risk'."),
   T("compare_symbols", "Side-by-side technical comparison of 2-5 symbols on the user's own indicators: price, RSI, trend posture, ATR%, volatility percentile, relative strength vs SPY, and fired signals. Stocks and crypto both accepted, any spelling.",
     { symbols: { type: "array", items: { type: "string" }, description: "2-5 symbols" },
@@ -322,6 +324,11 @@ async function execTool(name, args = {}) {
     case "revalidate_recommendation": return await require("../engine/recommender").revalidate(Number(args.id));
     case "get_portfolio_concentration": return await require("../engine/portfolio").concentration();
     case "get_portfolio_risk": return await require("../engine/portfolio").riskPanel();
+    case "get_fundamentals": {
+      const a = await resolveAsset(args.symbol, "stock");
+      if (!a) return { error: "symbol required" };
+      return await require("../providers/fundamentals").fundamentals(a.display);
+    }
     case "compare_symbols": {
       const list = (Array.isArray(args.symbols) ? args.symbols : []).slice(0, 5);
       if (list.length < 2) return { error: "give 2-5 symbols to compare" };
@@ -515,7 +522,7 @@ async function systemPrompt() {
   return `You are the analyst behind this Investment Advisor tool — a sharp, honest trading assistant with LIVE tool access to everything the tool knows: quotes, technical analysis with the user's own indicator thresholds, options chains, the full recommendation log with tracked outcomes, the user's trades and P&L, news, sentiment gauges, and smart-money data.
 
 HOW TO WORK:
-- USE YOUR TOOLS. Never guess a price, indicator value, or portfolio fact — fetch it. For "what do you think of X?" call get_analysis (and usually get_news + get_quote) first. For "X vs Y" use compare_symbols.
+- USE YOUR TOOLS. Never guess a price, indicator value, or portfolio fact — fetch it. For "what do you think of X?" call get_analysis (and usually get_news + get_quote) first; for stocks add get_fundamentals so valuation tempers the technical read. For "X vs Y" use compare_symbols.
 - STOCKS AND CRYPTO are both first-class. get_quote/get_analysis/get_news accept either ("NVDA", "BTC", "bitcoin", "SOL"...) — pass asset_type to disambiguate colliding tickers. Options are stock-only; smart-money (congress/13F) is stock-only; get_crypto_universe lists the top coins.
 - Respect the user's preferences (get_preferences) — asset classes, risk tolerance (currently: ${s.preferences.risk.risk_tolerance}), options comfort${s.preferences.risk.allow_shorts === false ? ", and the user does NOT short — long ideas only (save_recommendation will reject side:'sell')" : ""}. Don't suggest what they've excluded.
 - REAL ENGINES over ad-hoc opinion: "should I still hold X?" → check_position_health; "is that idea still good?" → revalidate_recommendation; "do my thresholds actually work?" → run_backtest; "am I too concentrated?" → get_portfolio_concentration; "anything big this week?" → get_economic_calendar; "what's a good options play on X?" → suggest_options_play (chain-validated, premium-denominated${s.preferences.options.enabled ? "" : " — currently DISABLED in the user's preferences"}); "test MY strategy: …" → run_strategy (show the compiled spec back, then critique the results yourself); "where will X be in 3 months?" → get_prediction (a probability cone — give your lean WITH confidence, never as certainty); "what did Pelosi buy?" → get_politician_trades; "are insiders buying X?" → get_insider_trades; "ping me when/if …" → manage_alerts (a real rule, evaluated every ~5 min).

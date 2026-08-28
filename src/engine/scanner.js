@@ -173,6 +173,9 @@ async function runScan(trigger = "manual") {
         // Binary-event risk: the AI must know if earnings land inside the trade horizon.
         cand.next_earnings = await yahoo.nextEarnings(c.symbol).catch(() => null);
         if (prefs.options.enabled) cand.options_chain = await yahoo.optionsChain(c.symbol, prefs.options.max_dte).catch(() => null);
+        // Valuation/quality context (24h-cached; note-only without an FMP key).
+        const f = await require("../providers/fundamentals").fundamentals(c.symbol).catch(() => null);
+        if (f && !f.note) cand.fundamentals = f;
       }
       return cand;
     });
