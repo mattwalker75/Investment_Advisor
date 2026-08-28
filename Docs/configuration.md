@@ -86,6 +86,10 @@ feed the AI and the shortlist scoring; charts draw only what you toggle. See
 `track_open_trades_minutes` (5), `track_recommendations_minutes` (30),
 `rec_expiry_days` (10 — entry never hit → expired), `health_check_hours` (12; 0 = manual),
 `briefing_enabled` / `briefing_hour` (daily AI briefing at a local hour).
+`backup_enabled` / `backup_keep` — daily SQLite backup into `data/backups/` (on by
+default, newest 14 kept, fires when the newest backup is >24h old). The DB is the entire
+accumulated track record; a **Back up now** button lives in Settings → Database. MySQL
+users: schedule `mysqldump` externally instead.
 
 ### 👁 View (`view`)
 Show/hide main tabs (Recommendations, Charts, Watchlist, Trades, Performance) and

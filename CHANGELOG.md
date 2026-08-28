@@ -4,6 +4,36 @@ All notable changes to Investment Advisor are tracked here.
 
 ## [Unreleased]
 
+### Added (batch 3)
+- 2026-08-28: **Automatic DB backups.** Daily SQLite snapshot into `data/backups/`
+  (better-sqlite3 online backup — safe while writing), newest `backup_keep` retained
+  (default 14), on by default, plus `POST /api/db/backup` and a **Back up now** button.
+- 2026-08-28: **Broker/portfolio CSV import.** `POST /api/trades/import` + an Import CSV
+  button (paste or file): loose header matching, RFC-4180 parsing, crypto auto-resolve,
+  duplicate open positions skipped, per-row errors reported. Imported rows are open
+  trades — health checks, concentration, tracking, and the briefing cover the whole
+  portfolio from day one.
+- 2026-08-28: **Equity curve + what-if paper mode.** `GET /api/portfolio/equity` and a
+  Performance card: the realized account curve (closed-trade P&L on the configured
+  account size) beside the dashed WHAT-IF curve — every finished recommendation taken at
+  its shadow entry with the user's risk sizing (sequential, capped at equity). Tiles for
+  final equity, return %, and max drawdown.
+- 2026-08-28: **Tax holding-period awareness.** Closed trades show holding days + a
+  short/long-term chip, the trades CSV gains `holding_days`/`tax_term` columns, and
+  `/api/performance` splits realized P&L by term.
+- 2026-08-28: **Data-source degradation indicator.** `GET /api/health/providers` + a
+  topbar chip that appears only when something is off: "⛔ data throttled" during a
+  Yahoo cooldown, "⚠ keyless data" when no stock keys are set — with the fix in the
+  tooltip.
+- 2026-08-28: **Chart tools.** "vs symbol" relative-comparison overlay (both series on a
+  percentage scale, re-fetched on symbol/range change) and ✏ Level mode — click to drop
+  horizontal price lines, persisted per symbol, ✖ clears.
+- 2026-08-28: **UI polish.** Styled confirm dialogs on destructive/grading actions
+  (dismiss/complete recommendations, watchlist removal) with consequences spelled out;
+  consistent Loading… / error-with-Retry states on the recommendations, watchlist,
+  trades, and performance panels; a section-index comment atop app.js; and a dashboard
+  **Ask the Advisor** card with four prompt chips that open the chat prefilled.
+
 ### Added (batch 2)
 - 2026-08-27: **AI plumbing upgrades.** JSON-producing calls now request structured
   output (`response_format: json_object`) with per-endpoint feature detection; optional
