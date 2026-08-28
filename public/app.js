@@ -437,6 +437,35 @@ $("trade-add-btn").addEventListener("click", () => {
   });
 });
 
+// Import existing positions from a broker CSV export (paste or pick a file).
+$("trade-import-btn").addEventListener("click", () => {
+  modal(`<h3>Import positions from CSV</h3>
+    <div class="hint">Paste a broker export (or choose a file). Needs at least <b>symbol</b>, <b>quantity</b>, and <b>price</b> columns — common header names are recognized (ticker, shares, avg cost…), extra columns are ignored. Rows become open trades so health checks, concentration, and tracking cover your whole portfolio.</div>
+    <div class="frow"><input type="file" id="m-csvfile" accept=".csv,text/csv"></div>
+    <textarea id="m-csv" style="width:100%;min-height:140px;font-family:monospace" placeholder="symbol,shares,avg_cost\nNVDA,10,121.50\nBTC-USD,0.25,61000"></textarea>
+    <div class="actions"><button class="ghost" onclick="document.getElementById('modal').hidden=true">Cancel</button>
+    <button class="primary" id="m-go">Import</button></div>
+    <div class="hint" id="m-import-note"></div>`);
+  $("m-csvfile").addEventListener("change", () => {
+    const f = $("m-csvfile").files[0];
+    if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => { $("m-csv").value = String(rd.result || ""); };
+    rd.readAsText(f);
+  });
+  $("m-go").addEventListener("click", async () => {
+    const csv = $("m-csv").value.trim();
+    if (!csv) return;
+    $("m-import-note").textContent = "importing…";
+    try {
+      const r = await api("/api/trades/import", { method: "POST", body: JSON.stringify({ csv }) });
+      $("m-import-note").innerHTML = `✓ imported ${r.imported}${r.skipped_duplicates ? ` · ${r.skipped_duplicates} duplicate(s) skipped` : ""}${(r.errors || []).length ? `<br>⚠ ${r.errors.map(esc).join("<br>")}` : ""}`;
+      loadTrades(); loadDashboard();
+      if (!(r.errors || []).length) setTimeout(closeModal, 1800);
+    } catch (e) { $("m-import-note").textContent = "✗ " + e.message; }
+  });
+});
+
 function exitModal(t, remaining) {
   modal(`<h3>Exit — ${esc(t.symbol)}</h3>
     <div class="hint">Remaining position: ${remaining} @ entry ${fmtP(t.entry_price)}. Partial exits are fine — the trade closes when quantity reaches zero.</div>

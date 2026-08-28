@@ -5,7 +5,7 @@ const express = require("express");
 
 const db = require("../db");
 const yahoo = require("../providers/yahoo");
-const { J, yahooSym, toCsv } = require("../util");
+const { J, yahooSym, toCsv, parseCsv } = require("../util");
 
 const router = express.Router();
 
@@ -90,6 +90,66 @@ router.post("/trades", async (req, res) => {
        JSON.stringify(b.targets || []), od ? JSON.stringify(od) : null, b.notes || null]
     );
     res.json({ ok: true, trade_id: t.lastID });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Import existing positions from a broker CSV export: POST {"csv": "..."}.
+// Header names are matched loosely (symbol/ticker, qty/shares/quantity,
+// price/avg_cost/cost_basis…), extra columns are ignored, rows land as OPEN trades so
+// health checks, concentration, tracking, and the briefing cover the whole portfolio.
+const IMPORT_ALIASES = {
+  symbol: ["symbol", "ticker", "instrument", "asset", "security"],
+  qty: ["qty", "quantity", "shares", "units", "amount", "position", "position_size"],
+  entry_price: ["entry_price", "price", "avg_cost", "avg_price", "average_cost", "average_price", "cost", "cost_basis", "purchase_price", "entry"],
+  side: ["side", "direction", "position_side"],
+  asset_type: ["asset_type", "type", "class", "asset_class"],
+  entry_date: ["entry_date", "date", "opened", "open_date", "purchase_date", "acquired", "trade_date"],
+  stop_loss: ["stop_loss", "stop"],
+  notes: ["notes", "note", "description", "account"],
+};
+router.post("/trades/import", async (req, res) => {
+  try {
+    const csv = String((req.body && req.body.csv) || "");
+    if (!csv.trim()) return res.status(400).json({ error: 'csv text required — POST {"csv": "..."}' });
+    const rows = parseCsv(csv);
+    if (rows.length < 2) return res.status(400).json({ error: "need a header row plus at least one data row" });
+    const header = rows[0].map((h) => h.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_"));
+    const col = {};
+    for (const [field, aliases] of Object.entries(IMPORT_ALIASES)) {
+      const idx = header.findIndex((h) => aliases.includes(h));
+      if (idx >= 0) col[field] = idx;
+    }
+    if (col.symbol == null || col.qty == null || col.entry_price == null)
+      return res.status(400).json({ error: "couldn't find symbol, quantity, and price columns", detected_headers: header });
+    const { resolveAsset } = require("../resolve");
+    const openExisting = await db.all("SELECT symbol, qty, entry_price FROM trades WHERE status='open'");
+    const num = (v) => Number(String(v).replace(/[$,]/g, ""));
+    let imported = 0, skipped = 0;
+    const errors = [];
+    for (const [n, raw] of rows.slice(1).entries()) {
+      try {
+        const get = (f) => (col[f] != null ? String(raw[col[f]] ?? "").trim() : "");
+        const sym = get("symbol").toUpperCase();
+        const qty = num(get("qty"));
+        const price = num(get("entry_price"));
+        if (!sym || !isFinite(qty) || qty <= 0 || !isFinite(price) || price <= 0) { errors.push(`row ${n + 2}: needs symbol, positive qty and price`); continue; }
+        const hint = /crypto/i.test(get("asset_type")) ? "crypto" : /stock|equity/i.test(get("asset_type")) ? "stock" : undefined;
+        const a = await resolveAsset(sym, hint);
+        // Duplicate guard: an identical open position (symbol+qty+price) is skipped.
+        if (openExisting.some((t) => t.symbol === a.display && Math.abs(t.qty - qty) < 1e-9 && Math.abs(t.entry_price - price) < 1e-6)) { skipped++; continue; }
+        const side = /short|sell/i.test(get("side")) ? "sell" : "buy";
+        const when = Date.parse(get("entry_date")) || Date.now();
+        const stop = num(get("stop_loss"));
+        await db.run(
+          "INSERT INTO trades (rec_id, created_at, asset_type, symbol, side, qty, entry_price, entry_at, stop_loss, targets, option_details, status, notes) VALUES (NULL,?,?,?,?,?,?,?,?,?,NULL,'open',?)",
+          [Date.now(), a.asset_type === "index" ? "stock" : a.asset_type, a.display, side, qty, price, when,
+           isFinite(stop) && stop > 0 ? stop : null, JSON.stringify([]), get("notes") || "imported"]);
+        openExisting.push({ symbol: a.display, qty, entry_price: price });   // in-file dupes too
+        imported++;
+      } catch (e) { errors.push(`row ${n + 2}: ${e.message}`); }
+    }
+    res.json({ imported, skipped_duplicates: skipped, errors: errors.slice(0, 20),
+      note: imported ? "Imported positions are open trades — health checks, concentration warnings, tracking, and the daily briefing now cover them. Add stops via the ✎ button or ask the advisor." : undefined });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

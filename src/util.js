@@ -31,10 +31,35 @@ function ladderPnl(entry, targetsHit, targets, residualPrice, side) {
   return +pnl.toFixed(2);
 }
 
+// Minimal RFC-4180 CSV parser (quoted fields, escaped quotes, CR/LF) → array of rows.
+// Used by the broker-CSV trade import.
+function parseCsv(text) {
+  const rows = [];
+  let row = [], field = "", inQ = false;
+  const s = String(text || "");
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inQ) {
+      if (c === '"') { if (s[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
+      else field += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && s[i + 1] === "\n") i++;
+      row.push(field); field = "";
+      if (row.length > 1 || row[0] !== "") rows.push(row);
+      row = [];
+    } else field += c;
+  }
+  row.push(field);
+  if (row.length > 1 || row[0] !== "") rows.push(row);
+  return rows;
+}
+
 // Minimal CSV writer for the export endpoints (RFC-4180 quoting).
 function toCsv(rows, cols) {
   const escape = (v) => v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
   return [cols.join(","), ...rows.map((r) => cols.map((c) => escape(r[c])).join(","))].join("\n");
 }
 
-module.exports = { J, yahooSym, pctChange, ladderPnl, toCsv };
+module.exports = { J, yahooSym, pctChange, ladderPnl, toCsv, parseCsv };
