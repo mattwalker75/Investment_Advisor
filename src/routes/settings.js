@@ -103,6 +103,12 @@ router.put("/db/config", (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+// Back up the database on demand (SQLite; MySQL returns a mysqldump note).
+router.post("/db/backup", async (_req, res) => {
+  try { res.json(await db.backupNow((await settings.getAll()).schedule.backup_keep || 14)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Send a test notification through the configured webhook.
 router.post("/notify/test", async (req, res) => {
   try {

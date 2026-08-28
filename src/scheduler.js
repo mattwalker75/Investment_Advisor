@@ -68,6 +68,22 @@ function start() {
     } catch (e) { console.error("[scheduler] health check failed:", e.message); }
   }, 5 * 60 * 1000));
 
+  // Daily DB backup (SQLite): the database is the entire accumulated track record.
+  // Fires when the newest backup is >24h old — checked every 30 min, plus once shortly
+  // after boot so a long-stopped instance catches up immediately.
+  const backupTick = async () => {
+    const sch = settings.getSync().schedule;
+    if (sch.backup_enabled === false) return;
+    const db = require("./db");
+    if (Date.now() - db.lastBackupAt() < 24 * 3600 * 1000) return;
+    try {
+      const r = await db.backupNow(sch.backup_keep || 14);
+      if (!r.skipped) console.log(`[scheduler] DB backup: ${r.file} (${Math.round(r.size_bytes / 1024)} KB, ${r.backups_kept} kept)`);
+    } catch (e) { console.error("[scheduler] backup failed:", e.message); }
+  };
+  timers.push(setInterval(backupTick, 30 * 60 * 1000));
+  setTimeout(backupTick, 90 * 1000);
+
   // Daily AI briefing at the configured local hour.
   let lastBriefing = 0;
   timers.push(setInterval(async () => {

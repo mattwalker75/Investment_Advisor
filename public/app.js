@@ -811,7 +811,8 @@ async function loadSettings() {
       <div class="frow"><label>Password</label><input type="password" id="db-pass" value="${esc(dbc && dbc.mysql ? dbc.mysql.password : "")}"></div>
       <div class="frow"><label>Database</label><input type="text" id="db-name" value="${esc(dbc && dbc.mysql ? dbc.mysql.database : "investment_advisor")}"></div>
     </div>
-    <div class="save-row"><button class="primary" id="save-db">Save</button><span id="note-db"></span></div>
+    <div class="save-row"><button class="primary" id="save-db">Save</button>
+      <button class="ghost" id="db-backup-now" title="Snapshot the database into data/backups/ right now">💾 Back up now</button><span id="note-db"></span></div>
   </div>
 
   <div class="sform" id="sf-prefs">
@@ -880,6 +881,8 @@ async function loadSettings() {
     <div class="frow"><label>Health checks (hours)</label><input type="number" class="short" id="sc-health" min="0" value="${s.schedule.health_check_hours}"><span class="hint">0 = manual only</span></div>
     <div class="frow check"><input type="checkbox" id="sc-brief" ${s.schedule.briefing_enabled ? "checked" : ""}><label for="sc-brief"><b>Daily AI briefing</b></label>
       <label style="width:auto">at hour</label><input type="number" class="short" id="sc-briefhour" min="0" max="23" value="${s.schedule.briefing_hour}"></div>
+    <div class="frow check"><input type="checkbox" id="sc-backup" ${s.schedule.backup_enabled !== false ? "checked" : ""}><label for="sc-backup"><b>Daily database backup</b> <span class="hint">(SQLite → data/backups/)</span></label>
+      <label style="width:auto">keep</label><input type="number" class="short" id="sc-backupkeep" min="1" max="60" value="${s.schedule.backup_keep ?? 14}"></div>
     <div class="save-row"><button class="primary" id="save-sched">Save</button><span id="note-sched"></span></div>
   </div>
 
@@ -975,6 +978,13 @@ async function loadSettings() {
     } catch (e) { note("note-ai", "✗ " + e.message, false); }
   });
   $("db-dialect").addEventListener("change", () => { $("db-mysql").hidden = $("db-dialect").value !== "mysql"; });
+  $("db-backup-now").addEventListener("click", async () => {
+    note("note-db", "backing up…");
+    try {
+      const r = await api("/api/db/backup", { method: "POST" });
+      note("note-db", r.skipped ? r.note : `✓ ${r.file} (${Math.round(r.size_bytes / 1024)} KB, ${r.backups_kept} kept)`);
+    } catch (e) { note("note-db", "✗ " + e.message, false); }
+  });
   $("save-db").addEventListener("click", async () => {
     try {
       const body = { dialect: $("db-dialect").value };
@@ -1034,6 +1044,7 @@ async function loadSettings() {
         track_open_trades_minutes: Number($("sc-trades").value), track_recommendations_minutes: Number($("sc-recs").value),
         rec_expiry_days: Number($("sc-expiry").value), health_check_hours: Number($("sc-health").value),
         briefing_enabled: $("sc-brief").checked, briefing_hour: Number($("sc-briefhour").value),
+        backup_enabled: $("sc-backup").checked, backup_keep: Number($("sc-backupkeep").value) || 14,
       }) });
       note("note-sched", "Saved ✓");
     } catch (e) { note("note-sched", e.message, false); }

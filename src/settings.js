@@ -112,6 +112,9 @@ const DEFAULTS = {
     health_check_hours: 12,      // AI position health checks on open trades (0 = manual only)
     briefing_enabled: false,     // daily AI briefing (market + your positions + active ideas)
     briefing_hour: 8,            // local hour it generates
+    // Daily SQLite backup into data/backups/ (the DB is the whole track record).
+    backup_enabled: true,
+    backup_keep: 14,             // newest N backups retained
   },
 
   // --- View: which tabs/cards the UI SHOWS. Display-only — hiding something never

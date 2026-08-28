@@ -99,6 +99,36 @@ async function run(sql, params = []) {
   return { lastID: r.insertId || 0, changes: r.affectedRows || 0 };
 }
 
+// ---- Automatic backups (SQLite): the DB holds the entire accumulated track record —
+// trades, every recommendation and outcome, settings — in one file. backupNow() uses
+// better-sqlite3's online backup API (safe while the app is writing) into
+// data/backups/, pruning to the newest `keep`. MySQL users schedule mysqldump instead.
+const BACKUP_DIR = path.join(ROOT, "data", "backups");
+async function backupNow(keep = 14) {
+  if (dialect !== "sqlite") return { skipped: true, note: "MySQL backend — schedule mysqldump outside the app for backups" };
+  if (!sqlite) throw new Error("database not initialized");
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+  const dest = path.join(BACKUP_DIR, `advisor-${stamp}.db`);
+  await sqlite.backup(dest);
+  const files = fs.readdirSync(BACKUP_DIR).filter((f) => /^advisor-.*\.db$/.test(f)).sort();
+  while (files.length > Math.max(1, keep)) {
+    const f = files.shift();
+    try { fs.unlinkSync(path.join(BACKUP_DIR, f)); } catch (_) {}
+  }
+  return { file: path.relative(ROOT, dest), size_bytes: fs.statSync(dest).size, backups_kept: files.length };
+}
+// Newest backup's mtime (0 when none) — the scheduler uses this to fire once per day.
+function lastBackupAt() {
+  try {
+    let newest = 0;
+    for (const f of fs.readdirSync(BACKUP_DIR)) {
+      if (/^advisor-.*\.db$/.test(f)) newest = Math.max(newest, fs.statSync(path.join(BACKUP_DIR, f)).mtimeMs);
+    }
+    return newest;
+  } catch (_) { return 0; }
+}
+
 // Dialect-correct INSERT ... upsert statement: inserts `cols`, and on a `keyCol`
 // conflict updates every non-key column. Callers bind values in `cols` order. Keeps the
 // MySQL-vs-SQLite conflict-clause fork in ONE place.
@@ -126,7 +156,7 @@ async function close() {
 }
 
 module.exports = {
-  init, all, get, run, upsertSql, dropAll, close, loadConfig,
+  init, all, get, run, upsertSql, backupNow, lastBackupAt, dropAll, close, loadConfig,
   get dialect() { return dialect; },
   CONFIG_FILE,
 };
