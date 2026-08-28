@@ -78,7 +78,11 @@ router.post("/advisor-chat", async (req, res) => {
 router.get("/performance", async (_req, res) => {
   const recs = await db.all("SELECT id, symbol, asset_type, side, status, confidence, created_at, outcome, taken FROM recommendations ORDER BY id DESC LIMIT 1000");
   const parsed = recs.map((r) => ({ ...r, outcome: J(r.outcome, {}) || {} }));
-  const finished = parsed.filter((r) => ["stopped", "target_hit"].includes(r.status) && r.outcome.pnl_pct != null);
+  // Finished = graded against real prices: stopped, full ladder, or an option settled
+  // at expiry (status closed + result expired_settled).
+  const finished = parsed.filter((r) =>
+    (["stopped", "target_hit"].includes(r.status) || (r.status === "closed" && r.outcome.result === "expired_settled"))
+    && r.outcome.pnl_pct != null);
   const wins = finished.filter((r) => r.outcome.pnl_pct > 0);
   const trades = await db.all("SELECT * FROM trades WHERE status='closed' ORDER BY id DESC LIMIT 500");
   const tWins = trades.filter((t) => (t.pnl || 0) > 0);
@@ -96,6 +100,7 @@ router.get("/performance", async (_req, res) => {
       by_asset: {
         stock: finished.filter((r) => r.asset_type === "stock").length,
         crypto: finished.filter((r) => r.asset_type === "crypto").length,
+        option: finished.filter((r) => r.asset_type === "option").length,
       },
       recent_finished: finished.slice(0, 25).map((r) => ({ id: r.id, symbol: r.symbol, side: r.side, status: r.status, pnl_pct: r.outcome.pnl_pct, taken: r.taken })),
     },

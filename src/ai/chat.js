@@ -131,6 +131,10 @@ const TOOL_DEFS = [
     ["trade_id"]),
   T("get_economic_calendar", "Upcoming high-impact US macro events (FOMC, CPI, jobs report, GDP…) over the next N days (default 7) — binary-event risk beyond per-stock earnings dates. Requires the user's free FMP key; returns an explanatory note if unset.",
     { days: { type: "number", description: "1-30, default 7" } }),
+  T("suggest_options_play", "Design ONE options play on a STOCK within the user's ALLOWED strategies, validated against the LIVE chain: real strikes, net premium from bid/ask mids, breakeven, max loss/gain, and the at-the-money IV. The plan is PREMIUM-denominated (entry zone / stop / targets are premium levels). Pass save:true ONLY when the user asked to track it — that persists it as a shadow-tracked recommendation.",
+    { symbol: { type: "string" },
+      view: { type: "string", enum: ["bullish", "bearish", "neutral_income"], description: "your directional read; neutral_income = premium selling; omit to let the analysis decide" },
+      save: { type: "boolean", description: "persist as a tracked recommendation (default false)" } }, ["symbol"]),
   T("manage_memory", "Durable memory across conversations. action 'add' saves a short note (stable user preferences, goals, standing context — e.g. 'prefers 3-6 month holds', 'wants out of airlines'); 'remove' deletes by id; 'list' shows all. Your current notes are already in the system prompt. Save sparingly — only stable, genuinely useful facts.",
     { action: { type: "string", enum: ["add", "remove", "list"] }, note: { type: "string" }, id: { type: "string" } }, ["action"]),
 ];
@@ -217,7 +221,8 @@ async function execTool(name, args = {}) {
     }
     case "get_performance": {
       const recs = await db.all("SELECT status, outcome, taken, asset_type FROM recommendations");
-      const fin = recs.map((r) => ({ ...r, o: J(r.outcome, {}) || {} })).filter((r) => ["stopped", "target_hit"].includes(r.status) && r.o.pnl_pct != null);
+      const fin = recs.map((r) => ({ ...r, o: J(r.outcome, {}) || {} }))
+        .filter((r) => (["stopped", "target_hit"].includes(r.status) || (r.status === "closed" && r.o.result === "expired_settled")) && r.o.pnl_pct != null);
       const wins = fin.filter((r) => r.o.pnl_pct > 0);
       const trades = await db.all("SELECT pnl, pnl_pct FROM trades WHERE status='closed'");
       return {
@@ -355,6 +360,36 @@ async function execTool(name, args = {}) {
         await logEvent("stop_moved", "trade", t.id, t.symbol, `Stop moved (via chat): ${t.symbol} ${t.stop_loss ?? "—"} → ${stop}`);
       return { ok: true, symbol: t.symbol, stop_loss: stop, targets: J(targets, []), note: "Plan updated here — remind the user to mirror it at their broker." };
     }
+    case "suggest_options_play": {
+      if (!s.preferences.options.enabled) return { error: "options trading is disabled — the user can enable it in Settings → Options trading" };
+      const a = await resolveAsset(args.symbol, "stock");
+      if (!a) return { error: "symbol required" };
+      const asCrypto = await resolveAsset(args.symbol);
+      if (asCrypto && asCrypto.asset_type === "crypto") return { error: asCrypto.display + " is crypto — options plays are stock-only here" };
+      const [q, chain, candles] = await Promise.all([
+        yahoo.quote(a.yahoo).catch(() => null),
+        yahoo.optionsChain(a.yahoo, s.preferences.options.max_dte).catch(() => null),
+        yahoo.history(a.yahoo, 365).catch(() => null),
+      ]);
+      if (!chain || !((chain.calls || []).length || (chain.puts || []).length)) return { error: "no live options chain available for " + a.yahoo };
+      const latest = candles && candles.length >= 30 ? indicators.computeAllCached(`an:${a.yahoo}`, candles, s.indicators).latest : { price: chain.spot };
+      const optionsEngine = require("../engine/options");
+      const cand = { symbol: a.display, asset_type: "stock", name: a.name, price: (q && q.price) ?? chain.spot, indicators: latest, headlines: [], options_chain: chain };
+      const { recs } = await optionsEngine.recommendOptions(
+        { market: { as_of: new Date().toISOString(), sentiment: {}, top_headlines: [] }, candidates: [cand] },
+        () => {}, { viewHint: args.view });
+      if (!recs.length) return { error: "no play cleared validation for " + a.display + " — strikes may lack a market, or reward:risk fell short of the user's minimum. Try a different view, or explain why to the user." };
+      const play = recs[0];
+      if (args.save) {
+        const dup = await require("../engine/recommender").duplicateOf(play);
+        if (dup) return { error: `already tracking a similar play (recommendation ${dup.id})`, play };
+        const id = await optionsEngine.saveOptionRec(play, { inputs: { source: "advisor_chat", candidate: cand, saved_at: new Date().toISOString() } });
+        await logEvent("rec_new", "recommendation", id, play.symbol,
+          `💬 Options idea saved: ${play.options_play.strategy.replace(/_/g, " ")} ${play.symbol} ${play.options_play.strikes.join("/")} exp ${play.options_play.expiry} @ ~${play.current_price} premium`);
+        return { saved: true, id, play, note: "Now in the Recommendations tab, shadow-tracked on its live premium; it settles at intrinsic value if it reaches expiry." };
+      }
+      return { play, note: "NOT saved. If the user wants it tracked, call again with save:true." };
+    }
     case "get_economic_calendar": return await require("../providers/calendar").economicCalendar(args.days || 7);
     case "manage_memory": {
       const notes = await loadNotes();
@@ -394,7 +429,7 @@ HOW TO WORK:
 - USE YOUR TOOLS. Never guess a price, indicator value, or portfolio fact — fetch it. For "what do you think of X?" call get_analysis (and usually get_news + get_quote) first. For "X vs Y" use compare_symbols.
 - STOCKS AND CRYPTO are both first-class. get_quote/get_analysis/get_news accept either ("NVDA", "BTC", "bitcoin", "SOL"...) — pass asset_type to disambiguate colliding tickers. Options are stock-only; smart-money (congress/13F) is stock-only; get_crypto_universe lists the top coins.
 - Respect the user's preferences (get_preferences) — asset classes, risk tolerance (currently: ${s.preferences.risk.risk_tolerance}), options comfort${s.preferences.risk.allow_shorts === false ? ", and the user does NOT short — long ideas only (save_recommendation will reject side:'sell')" : ""}. Don't suggest what they've excluded.
-- REAL ENGINES over ad-hoc opinion: "should I still hold X?" → check_position_health; "is that idea still good?" → revalidate_recommendation; "do my thresholds actually work?" → run_backtest; "am I too concentrated?" → get_portfolio_concentration; "anything big this week?" → get_economic_calendar.
+- REAL ENGINES over ad-hoc opinion: "should I still hold X?" → check_position_health; "is that idea still good?" → revalidate_recommendation; "do my thresholds actually work?" → run_backtest; "am I too concentrated?" → get_portfolio_concentration; "anything big this week?" → get_economic_calendar; "what's a good options play on X?" → suggest_options_play (chain-validated, premium-denominated${s.preferences.options.enabled ? "" : " — currently DISABLED in the user's preferences"}).
 - When you recommend a trade idea, give the full structure: entry zone, stop loss, laddered targets with sell percentages, rough time horizon, and WHY — grounded in the data you fetched.
 - When the user asks you to CREATE/LOG/TRACK a trade idea, you MUST call save_recommendation — that is the ONLY way an idea reaches the Recommendations tab and gets tracked. NEVER claim an idea is saved or "being tracked" unless the tool returned saved:true. If validation rejects it, fix the levels (usually the reward:risk ratio) and try once more, or tell the user why it can't stand.
 - WRITE ACTIONS need consent: confirm with the user before manage_watchlist remove and ALWAYS before update_trade (state the exact new levels first). Never claim a write happened unless the tool returned ok:true.

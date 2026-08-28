@@ -194,13 +194,15 @@ function positionSize(r) {
   if (!appSettings) return null;
   const risk = appSettings.preferences.risk;
   const entryMid = (r.entry_low + r.entry_high) / 2;
-  const perUnit = Math.abs(entryMid - r.stop_loss);
+  // Option recs are premium-denominated: risk per CONTRACT = premium distance ×100.
+  const mult = r.asset_type === "option" ? 100 : 1;
+  const perUnit = Math.abs(entryMid - r.stop_loss) * mult;
   if (!perUnit || !entryMid) return null;
   const riskAmt = (risk.account_size * risk.risk_per_trade_pct) / 100;
   let qty = riskAmt / perUnit;
-  qty = r.asset_type === "stock" ? Math.floor(qty) : +qty.toFixed(4);
+  qty = r.asset_type === "crypto" ? +qty.toFixed(4) : Math.floor(qty);
   if (!qty) return null;
-  return { qty, cost: +(qty * entryMid).toFixed(2), risk_amount: +riskAmt.toFixed(2), entry_mid: entryMid };
+  return { qty, cost: +(qty * entryMid * mult).toFixed(2), risk_amount: +riskAmt.toFixed(2), entry_mid: entryMid, mult };
 }
 
 /* ---------- recommendations ---------- */
@@ -280,6 +282,8 @@ function recCard(r) {
   const pnl = outcome.pnl_pct;
   // Earnings-inside-horizon warning (extracted from the rec's input snapshot at scan time).
   const earn = r.earnings;
+  const isOpt = r.asset_type === "option";      // first-class option rec: all levels are PREMIUM
+  const lvl = (label) => isOpt ? "premium " + label : label;
   return `<div class="rec" id="rec-${r.id}">
     <div class="rec-head">
       <span class="sym">${esc(r.symbol)}</span>
@@ -305,6 +309,10 @@ function recCard(r) {
     <div class="rec-body">
       <div class="levels">
         ${(() => {   // live price + in-zone status (the "can I act NOW?" box)
+          if (isOpt) {   // option recs track the PREMIUM; latest tracked value lives in outcome.last_price
+            const lastPrem = r.outcome && r.outcome.last_price;
+            return `<div class="lvl"><div class="l">premium @ rec${lastPrem != null ? ' <span class="hint">· last tracked</span>' : ""}</div><div class="v">${fmtP(r.current_price)}${lastPrem != null ? ` → ${fmtP(lastPrem)}` : ""}</div></div>`;
+          }
           if (r.live_price == null || !["open", "tracking"].includes(r.status)) return `<div class="lvl"><div class="l">price @ rec</div><div class="v">${fmtP(r.current_price)}</div></div>`;
           const lp = r.live_price, mid = (r.entry_low + r.entry_high) / 2;
           const inZone = r.side === "buy" ? lp <= r.entry_high * 1.002 && lp >= r.entry_low * 0.99 : lp >= r.entry_low * 0.998 && lp <= r.entry_high * 1.01;
@@ -314,19 +322,20 @@ function recCard(r) {
           else zoneNote = `<span class="hint">${fmtPct(Math.abs((lp - (r.side === "buy" ? r.entry_low : r.entry_high)) / mid) * 100).replace("+", "")} past zone</span>`;
           return `<div class="lvl"><div class="l">price now <span class="hint">(@rec ${fmtP(r.current_price)})</span></div><div class="v">${fmtP(lp)} ${zoneNote}</div></div>`;
         })()}
-        <div class="lvl ${r.outcome && r.outcome.entry_hit_at ? "hit" : ""}"><div class="l">entry zone ${r.outcome && r.outcome.entry_hit_at ? "✓" : ""}</div><div class="v">${fmtP(r.entry_low)} – ${fmtP(r.entry_high)}</div></div>
+        <div class="lvl ${r.outcome && r.outcome.entry_hit_at ? "hit" : ""}"><div class="l">${lvl("entry zone")} ${r.outcome && r.outcome.entry_hit_at ? "✓" : ""}</div><div class="v">${fmtP(r.entry_low)} – ${fmtP(r.entry_high)}</div></div>
         ${(() => { const mid = (r.entry_low + r.entry_high) / 2; const pct = mid ? ((r.stop_loss - mid) / mid) * 100 : null;
-          return `<div class="lvl stop ${r.status === "stopped" ? "hit-stop" : ""}"><div class="l">stop loss ${r.status === "stopped" ? "✗ HIT" : ""}</div><div class="v">${fmtP(r.stop_loss)} <span class="hint">(${fmtPct(pct)})</span></div></div>`; })()}
+          return `<div class="lvl stop ${r.status === "stopped" ? "hit-stop" : ""}"><div class="l">${lvl("stop")} ${r.status === "stopped" ? "✗ HIT" : ""}</div><div class="v">${fmtP(r.stop_loss)} <span class="hint">(${fmtPct(pct)})</span></div></div>`; })()}
         ${(r.targets || []).map((t, i) => { const mid = (r.entry_low + r.entry_high) / 2; const pct = mid ? ((t.price - mid) / mid) * 100 : null;
           const hit = r.outcome && (r.outcome.targets_hit || []).includes(t.price);
-          return `<div class="lvl tgt ${hit ? "hit" : ""}"><div class="l">target ${i + 1} · sell ${t.sell_pct}% ${hit ? "✓" : ""}</div><div class="v">${fmtP(t.price)} <span class="hint">(${fmtPct(pct)})</span></div></div>`; }).join("")}
+          return `<div class="lvl tgt ${hit ? "hit" : ""}"><div class="l">${lvl("target")} ${i + 1} · sell ${t.sell_pct}% ${hit ? "✓" : ""}</div><div class="v">${fmtP(t.price)} <span class="hint">(${fmtPct(pct)})</span></div></div>`; }).join("")}
         <div class="lvl"><div class="l">est. duration</div><div class="v">${r.horizon_min_days}–${r.horizon_max_days}d${(() => {
           if (r.status === "tracking" && r.outcome && r.outcome.entry_hit_at) { const d = Math.max(1, Math.round((Date.now() - r.outcome.entry_hit_at) / 86400000)); return ` <span class="hint">· day ${d}</span>`; }
           if (r.status === "open" && r.expires_at) { const d = Math.ceil((Number(r.expires_at) - Date.now()) / 86400000); return d > 0 ? ` <span class="${d <= 2 ? "down" : "hint"}">· window closes ${d}d</span>` : ""; }
           return ""; })()}</div></div>
         ${(() => { const ps = positionSize(r); if (!ps) return "";
-          const reward = (r.targets || []).reduce((s2, t) => s2 + (t.sell_pct / 100) * Math.abs(t.price - ps.entry_mid) * ps.qty, 0);
-          return `<div class="lvl"><div class="l">suggested size · risk $${fmtP(ps.risk_amount, 0)}</div><div class="v">${ps.qty} ${r.asset_type === "stock" ? "sh" : "units"} ≈ $${fmtP(ps.cost, 0)} <span class="up">→ reward ≈ $${fmtP(reward, 0)}</span></div></div>`; })()}
+          const reward = (r.targets || []).reduce((s2, t) => s2 + (t.sell_pct / 100) * Math.abs(t.price - ps.entry_mid) * ps.qty * (ps.mult || 1), 0);
+          const unit = isOpt ? "contract(s)" : r.asset_type === "stock" ? "sh" : "units";
+          return `<div class="lvl"><div class="l">suggested size · risk $${fmtP(ps.risk_amount, 0)}</div><div class="v">${ps.qty} ${unit} ≈ $${fmtP(ps.cost, 0)} <span class="up">→ reward ≈ $${fmtP(reward, 0)}</span></div></div>`; })()}
       </div>
       ${(r.signals || []).length ? `<div class="sig-chips" title="the indicator signals the AI saw at recommendation time">${r.signals.slice(0, 6).map((x) => `<span>${esc(x)}</span>`).join("")}</div>` : ""}
       ${r.options_play ? `<div class="opt-play"><span class="tag">OPTIONS PLAY</span> — <b>${esc(r.options_play.strategy.replace(/_/g, " "))}</b>
@@ -341,7 +350,7 @@ function recCard(r) {
       ${outcome.entry_price ? `<div class="hint">shadow entry ${fmtP(outcome.entry_price)} ${outcome.targets_hit && outcome.targets_hit.length ? "· targets hit: " + outcome.targets_hit.map((p) => fmtP(p)).join(", ") : ""} ${outcome.last_price ? "· last " + fmtP(outcome.last_price) : ""}</div>` : ""}
       <div class="rec-actions">
         <button class="ghost to-chart">📈 Chart</button>
-        ${!r.taken && ["open", "tracking"].includes(r.status) ? '<button class="take">✅ I took this trade</button>' : ""}
+        ${!r.taken && !isOpt && ["open", "tracking"].includes(r.status) ? '<button class="take">✅ I took this trade</button>' : ""}
         ${!r.taken && r.options_play && ["open", "tracking"].includes(r.status) ? '<button class="take take-option" style="background:linear-gradient(180deg,#8b5cf6,#6d28d9)">🧾 Took the option</button>' : ""}
         ${["open", "tracking"].includes(r.status) ? '<button class="ghost complete-btn" title="Mark this idea finished — a tracking idea is graded at the current price">✔ Complete</button>' : ""}
         ${["open", "tracking"].includes(r.status) ? '<button class="ghost revalidate" title="AI re-checks this idea against current data">♻ Re-validate</button>' : ""}

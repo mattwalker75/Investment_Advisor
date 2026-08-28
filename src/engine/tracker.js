@@ -48,7 +48,10 @@ async function backfillGaps() {
   await saveLastPass(now0);
   if (!last) return { first_run: true };                                 // nothing to replay yet
 
-  const recs = await db.all("SELECT * FROM recommendations WHERE status IN ('open','tracking')");
+  // Option recs are excluded from backfill: there is no historical premium data to
+  // replay — they resume live premium tracking on the next pass instead.
+  const recs = (await db.all("SELECT * FROM recommendations WHERE status IN ('open','tracking')"))
+    .filter((r) => r.asset_type !== "option");
   const trades = await db.all("SELECT * FROM trades WHERE status='open'");
   if (!recs.length && !trades.length) return { backfilled: 0 };
 
@@ -140,17 +143,41 @@ async function backfillGaps() {
 }
 
 // --- 1. Shadow-track recommendations ---
+// Stock/crypto recs price off quotes. OPTION recs price off the LIVE NET PREMIUM of
+// their legs (per share) — the same state machine then applies unchanged, because an
+// option rec's entry/stop/targets are premium levels by construction (see options.js).
 async function trackRecommendations() {
   await backfillGaps().catch((e) => console.error("[tracker] backfill failed:", e.message));
-  const recs = await db.all("SELECT * FROM recommendations WHERE status IN ('open','tracking')");
-  if (!recs.length) return { checked: 0 };
-  const symbols = [...new Set(recs.map(yahooSym))];
-  const quotes = await yahoo.quotes(symbols);
+  const all = await db.all("SELECT * FROM recommendations WHERE status IN ('open','tracking')");
+  if (!all.length) return { checked: 0 };
+  const optionsEngine = require("./options");
+  const optionRecs = all.filter((r) => r.asset_type === "option");
+  const recs = all.filter((r) => r.asset_type !== "option");
+
+  const priceById = {};
+  if (recs.length) {
+    const quotes = await yahoo.quotes([...new Set(recs.map(yahooSym))]);
+    for (const r of recs) {
+      const q = quotes[yahooSym(r)];
+      if (q && q.price != null) priceById[r.id] = q.price;
+    }
+  }
+  // Options: settle anything past expiry at intrinsic value, price the rest off the chain.
+  for (const r of optionRecs) {
+    const play = J(r.options_play, null);
+    if (!play || !play.strategy) continue;
+    if (optionsEngine.isExpired(play)) {
+      await settleExpiredOptionRec(r, play, optionsEngine).catch((e) => console.error("[tracker] option settle failed:", e.message));
+      continue;
+    }
+    const p = await optionsEngine.optionPremium(r);
+    if (p && p.premium != null) { priceById[r.id] = p.premium; recs.push(r); }
+    // no premium (chain gap / throttle): the rec just waits for the next pass
+  }
 
   for (const r of recs) {
-    const q = quotes[yahooSym(r)];
-    if (!q || q.price == null) continue;
-    const price = q.price;
+    const price = priceById[r.id];
+    if (price == null) continue;
     const targets = J(r.targets, []);
     const outcome = J(r.outcome, {}) || {};
 
@@ -203,6 +230,32 @@ async function trackRecommendations() {
     }
   }
   return { checked: recs.length };
+}
+
+// An option rec that reaches expiry SETTLES at intrinsic value (net, per share):
+//  - still 'open' (premium entry never touched): the idea expired untriggered.
+//  - 'tracking': graded through the ladder rule with the settlement premium as the
+//    residual price; status 'closed' + outcome.result='expired_settled' so it counts in
+//    the honest stats alongside stopped/target_hit.
+async function settleExpiredOptionRec(r, play, optionsEngine) {
+  const outcome = J(r.outcome, {}) || {};
+  if (r.status === "open" || outcome.entry_price == null) {
+    outcome.result = "expired"; outcome.expired_at = now();
+    await db.run("UPDATE recommendations SET status='expired', outcome=? WHERE id=?", [JSON.stringify(outcome), r.id]);
+    await logEvent("rec_expired", "recommendation", r.id, r.symbol,
+      `${r.symbol} ${play.strategy.replace(/_/g, " ")} idea expired — premium entry never hit before the option's expiry`);
+    return;
+  }
+  const q = await yahoo.quote(r.symbol).catch(() => null);
+  const spot = (q && q.price) ?? play.underlying_price;
+  const settle = spot != null ? +optionsEngine.settlementPremium(play.strategy, play.strikes, spot).toFixed(2) : 0;
+  const targets = J(r.targets, []);
+  outcome.result = "expired_settled"; outcome.exit_at = now();
+  outcome.exit_price = settle; outcome.settlement_underlying = spot ?? null;
+  outcome.pnl_pct = ladderPnl(outcome.entry_price, outcome.targets_hit || [], targets, settle, r.side);
+  await db.run("UPDATE recommendations SET status='closed', outcome=? WHERE id=?", [JSON.stringify(outcome), r.id]);
+  await logEvent(outcome.pnl_pct >= 0 ? "target_hit" : "stop_hit", "recommendation", r.id, r.symbol,
+    `⌛ ${r.symbol} ${play.strategy.replace(/_/g, " ")} settled at expiry — intrinsic ${settle} → ${outcome.pnl_pct > 0 ? "+" : ""}${outcome.pnl_pct}% (shadow)`);
 }
 
 // Dynamic stop suggestion for an open trade (advisory — the user applies it):

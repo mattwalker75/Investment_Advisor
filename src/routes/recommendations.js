@@ -33,16 +33,22 @@ router.get("/recommendations", async (req, res) => {
   const act = out.filter((r) => ["open", "tracking"].includes(r.status));
   if (act.length) {
     // Quotes in one batch; sector lookups fan out in parallel per UNIQUE stock symbol.
-    const stockSyms = [...new Set(act.filter((r) => r.asset_type === "stock").map((r) => r.symbol))];
+    // OPTION recs get NO quote-based live_price — their tracked price is the premium
+    // (the tracker stores the latest in outcome.last_price); the underlying's sector
+    // still applies.
+    const quoted = act.filter((r) => r.asset_type !== "option");
+    const stockSyms = [...new Set(act.filter((r) => ["stock", "option"].includes(r.asset_type)).map((r) => r.symbol))];
     const [qs, sectorPairs] = await Promise.all([
-      yahoo.quotes([...new Set(act.map(yahooSym))]).catch(() => ({})),
+      quoted.length ? yahoo.quotes([...new Set(quoted.map(yahooSym))]).catch(() => ({})) : {},
       Promise.all(stockSyms.map((sym) => yahoo.sector(sym).then((s) => [sym, s.sector || null]).catch(() => [sym, null]))),
     ]);
     const sectors = Object.fromEntries(sectorPairs);
     for (const r of act) {
-      const q = qs[yahooSym(r)];
-      if (q && q.price != null) r.live_price = q.price;
-      if (r.asset_type === "stock") r.sector = sectors[r.symbol] ?? null;
+      if (r.asset_type !== "option") {
+        const q = qs[yahooSym(r)];
+        if (q && q.price != null) r.live_price = q.price;
+      }
+      if (["stock", "option"].includes(r.asset_type)) r.sector = sectors[r.symbol] ?? null;
     }
   }
   res.json(out);
@@ -64,7 +70,8 @@ router.post("/recommendations/:id/take", async (req, res) => {
     const b = req.body || {};
     if (!b.qty || !b.entry_price) return res.status(400).json({ error: "qty and entry_price are required" });
     let assetType = r.asset_type, optionDetails = null;
-    if (b.instrument === "option") {
+    // A first-class option rec (asset_type 'option') is ALWAYS taken as an option.
+    if (b.instrument === "option" || r.asset_type === "option") {
       const play = J(r.options_play, null);
       if (!play) return res.status(400).json({ error: "this recommendation has no options play" });
       assetType = "option";

@@ -93,12 +93,17 @@ function compactCandidate(c) {
   if (c.smart_money) out.smart_money = c.smart_money;
   if (c.next_earnings) out.next_earnings = c.next_earnings;
   if (c.options_chain) {
-    // ≤8 strikes per side nearest the money, essential leg fields only.
+    // ≤8 strikes per side nearest the money, essential leg fields only, plus an
+    // at-the-money IV read so the model can judge rich vs modest premium.
     const near = (legs) => (legs || [])
       .slice().sort((a, b) => Math.abs(a.strike - c.price) - Math.abs(b.strike - c.price)).slice(0, 8)
       .sort((a, b) => a.strike - b.strike)
       .map((l) => ({ strike: l.strike, bid: l.bid, ask: l.ask, iv: l.iv, oi: l.open_interest }));
-    out.options_chain = { expiry: c.options_chain.expiry, calls: near(c.options_chain.calls), puts: near(c.options_chain.puts) };
+    out.options_chain = {
+      expiry: c.options_chain.expiry, dte: c.options_chain.dte,
+      atm_iv_pct: require("./options").atmIv(c.options_chain, c.price),
+      calls: near(c.options_chain.calls), puts: near(c.options_chain.puts),
+    };
   }
   return out;
 }
@@ -113,6 +118,28 @@ ${JSON.stringify(marketCompact)}
 ${JSON.stringify(candidatesCompact)}
 
 Remember: JSON only, symbols only from candidates, sell_pct sums to 100.`;
+}
+
+// Normalize a target ladder: numeric rungs beyond the entry on the correct side, max 3,
+// sell_pct renormalized to exactly 100. Returns [] when no valid rung remains. Shared
+// with the options validator (premium ladders follow the same rules).
+function normalizeTargets(raw, side, entryLow, entryHigh) {
+  const num = (v) => (typeof v === "number" && isFinite(v) && v > 0 ? v : null);
+  let targets = Array.isArray(raw) ? raw
+    .map((t) => ({ price: num(t.price), sell_pct: Math.max(1, Math.min(100, Math.round(t.sell_pct || 0))) }))
+    .filter((t) => t.price) : [];
+  if (side === "buy") targets = targets.filter((t) => t.price > entryHigh).sort((a, b) => a.price - b.price);
+  else targets = targets.filter((t) => t.price < entryLow).sort((a, b) => b.price - a.price);
+  targets = targets.slice(0, 3);
+  const pctSum = targets.reduce((s, t) => s + t.sell_pct, 0);
+  if (targets.length && pctSum !== 100) {
+    let acc = 0;
+    targets = targets.map((t, i) => {
+      const pct = i === targets.length - 1 ? 100 - acc : Math.max(1, Math.round((t.sell_pct / pctSum) * 100));
+      acc += pct; return { ...t, sell_pct: pct };
+    });
+  }
+  return targets;
 }
 
 // --- Validation: never trust a model number blindly. ---
@@ -133,21 +160,8 @@ function validateRec(r, candidateMap, prefs) {
   if (side === "buy" && stop >= entryLow) stop = entryLow * 0.95;   // stop must be below a long entry
   if (side === "sell" && stop <= entryHigh) stop = entryHigh * 1.05;
 
-  let targets = Array.isArray(r.targets) ? r.targets
-    .map((t) => ({ price: num(t.price), sell_pct: Math.max(1, Math.min(100, Math.round(t.sell_pct || 0))) }))
-    .filter((t) => t.price) : [];
-  if (side === "buy") targets = targets.filter((t) => t.price > entryHigh).sort((a, b) => a.price - b.price);
-  else targets = targets.filter((t) => t.price < entryLow).sort((a, b) => b.price - a.price);
+  const targets = normalizeTargets(r.targets, side, entryLow, entryHigh);
   if (!targets.length) return null;                        // a trade idea with no exit is not an idea
-  targets = targets.slice(0, 3);
-  const pctSum = targets.reduce((s, t) => s + t.sell_pct, 0);
-  if (pctSum !== 100) {                                    // renormalize the ladder to 100%
-    let acc = 0;
-    targets = targets.map((t, i) => {
-      const pct = i === targets.length - 1 ? 100 - acc : Math.max(1, Math.round((t.sell_pct / pctSum) * 100));
-      acc += pct; return { ...t, sell_pct: pct };
-    });
-  }
 
   const conf = Math.max(0, Math.min(1, Number(r.confidence) || 0));
   if (conf < prefs.risk.min_confidence) return null;
@@ -241,8 +255,9 @@ async function duplicateOf(rec) {
 // summary for the scan prompt, or null when there isn't enough finished history.
 async function calibrationSummary() {
   const db = require("../db");
-  const rows = await db.all("SELECT confidence, outcome FROM recommendations WHERE status IN ('stopped','target_hit')").catch(() => []);
-  const fin = rows.map((r) => ({ conf: Number(r.confidence), o: J(r.outcome, {}) || {} })).filter((r) => r.o.pnl_pct != null && isFinite(r.conf));
+  const rows = await db.all("SELECT confidence, status, outcome FROM recommendations WHERE status IN ('stopped','target_hit','closed')").catch(() => []);
+  const fin = rows.map((r) => ({ conf: Number(r.confidence), status: r.status, o: J(r.outcome, {}) || {} }))
+    .filter((r) => (r.status !== "closed" || r.o.result === "expired_settled") && r.o.pnl_pct != null && isFinite(r.conf));
   if (fin.length < 8) return null;                       // too little history to mean anything
   const buckets = [[0, 0.6], [0.6, 0.7], [0.7, 0.8], [0.8, 1.01]];
   const parts = [];
@@ -316,6 +331,7 @@ async function revalidate(recId) {
   const r = await db.get("SELECT * FROM recommendations WHERE id=?", [recId]);
   if (!r) throw new Error("recommendation not found");
   if (!["open", "tracking"].includes(r.status)) throw new Error("only open/tracking recommendations can be re-validated");
+  if (r.asset_type === "option") throw new Error("re-validation supports stock/crypto recommendations — option ideas are premium-tracked and settle at expiry instead");
 
   const ySym = yahooSym(r);
   const [q, candles, heads] = await Promise.all([
@@ -367,4 +383,4 @@ Respond ONLY with JSON: {"verdict":"valid","note":"2-3 sentences grounded in the
   return { verdict, note, updated };
 }
 
-module.exports = { recommend, revalidate, validateRec, duplicateOf, calibrationSummary };
+module.exports = { recommend, revalidate, validateRec, duplicateOf, calibrationSummary, normalizeTargets, compactMarket, compactCandidate };

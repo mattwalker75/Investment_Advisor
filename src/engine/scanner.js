@@ -222,12 +222,33 @@ async function runScan(trigger = "manual") {
         `New ${r.side.toUpperCase()} idea: ${r.symbol} @ ${r.entry_low}-${r.entry_high} (conf ${Math.round(r.confidence * 100)}%)`);
     }
 
+    // 6b. OPTIONS pass: standalone option plays over the chain-bearing candidates,
+    // premium-denominated and shadow-tracked like any other rec. Failure never kills
+    // the scan — stock/crypto recs above are already persisted.
+    let optSaved = 0;
+    if (prefs.options.enabled && prefs.asset_classes.stocks) {
+      const optionsEngine = require("./options");
+      running.step = "options analysis";
+      try {
+        const { recs: optRecs } = await optionsEngine.recommendOptions(context, say);
+        for (const r of optRecs) {
+          const dup = await recommender.duplicateOf(r);
+          if (dup) { say(`skipped ${r.options_play.strategy} ${r.symbol} — duplicate of active recommendation #${dup.id}`); continue; }
+          const cand = context.candidates.find((c) => c.symbol === r.symbol);
+          const id = await optionsEngine.saveOptionRec(r, { runId, inputs: { candidate: cand, market: context.market } });
+          optSaved++;
+          await logEvent("rec_new", "recommendation", id, r.symbol,
+            `New OPTIONS idea: ${r.options_play.strategy.replace(/_/g, " ")} ${r.symbol} ${r.options_play.strikes.join("/")} exp ${r.options_play.expiry} @ ~${r.current_price} premium (conf ${Math.round(r.confidence * 100)}%)`);
+        }
+      } catch (e) { say(`options pass failed: ${e.message}`); }
+    }
+
     await db.run(
       "UPDATE scan_runs SET status='done', finished_at=?, universe_count=?, shortlist_count=?, recs_count=?, log=? WHERE id=?",
-      [now(), universe.length, shortlist.length, recs.length - skippedDupes, JSON.stringify(log), runId]
+      [now(), universe.length, shortlist.length, recs.length - skippedDupes + optSaved, JSON.stringify(log), runId]
     );
-    await logEvent("scan", "scan", runId, null, `Scan complete: ${recs.length} recommendation(s) from ${universe.length} symbols`);
-    return { run_id: runId, recs_count: recs.length, market_outlook };
+    await logEvent("scan", "scan", runId, null, `Scan complete: ${recs.length - skippedDupes + optSaved} recommendation(s) from ${universe.length} symbols${optSaved ? ` (incl. ${optSaved} options play${optSaved > 1 ? "s" : ""})` : ""}`);
+    return { run_id: runId, recs_count: recs.length + optSaved, market_outlook };
   } catch (e) {
     await db.run("UPDATE scan_runs SET status='error', finished_at=?, error=?, log=? WHERE id=?",
       [now(), e.message, JSON.stringify(log), runId]).catch(() => {});
