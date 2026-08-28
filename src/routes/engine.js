@@ -105,6 +105,13 @@ router.get("/performance", async (_req, res) => {
       win_rate: trades.length ? +((tWins.length / trades.length) * 100).toFixed(1) : null,
       total_pnl: +trades.reduce((s, t) => s + (t.pnl || 0), 0).toFixed(2),
       avg_pnl_pct: avg(trades, (t) => t.pnl_pct || 0),
+      // Tax view: realized P&L split by holding period (≥365 days = long-term).
+      by_term: (() => {
+        const term = (t) => (t.closed_at && t.entry_at && (Number(t.closed_at) - Number(t.entry_at)) >= 365 * 86400000 ? "long" : "short");
+        const sum = (which) => trades.filter((t) => term(t) === which);
+        const mk = (arr) => ({ count: arr.length, pnl: +arr.reduce((s, t) => s + (t.pnl || 0), 0).toFixed(2) });
+        return { short: mk(sum("short")), long: mk(sum("long")) };
+      })(),
     },
   });
 });

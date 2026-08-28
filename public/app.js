@@ -514,14 +514,19 @@ async function loadTrades() {
     }).join("")}</tbody></table>` : '<div class="hint">No open positions. Take a recommendation or log a manual trade.</div>';
 
   $("trades-closed").innerHTML = closed.length ? `<table class="grid"><thead><tr>
-      <th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>P&L</th><th>Closed</th>
-    </tr></thead><tbody>${closed.map((t) => `<tr>
+      <th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>P&L</th><th>Held</th><th>Closed</th>
+    </tr></thead><tbody>${closed.map((t) => {
+      const heldDays = t.closed_at ? Math.max(0, Math.round((t.closed_at - t.entry_at) / 86400000)) : null;
+      const longTerm = heldDays != null && heldDays >= 365;
+      return `<tr>
       <td class="mono"><b>${esc(t.symbol)}</b></td>
       <td><span class="side ${t.side}">${t.side.toUpperCase()}</span></td>
       <td class="mono">${t.qty}</td>
       <td class="mono">${fmtP(t.entry_price)}</td>
       <td class="mono ${cls(t.pnl)}">$${fmtP(t.pnl, 2)} (${fmtPct(t.pnl_pct)})</td>
-      <td class="hint">${t.closed_at ? ago(t.closed_at) : "—"}</td></tr>`).join("")}</tbody></table>`
+      <td class="hint" title="holding period for tax purposes">${heldDays != null ? `${heldDays}d <span class="${longTerm ? "up" : ""}">${longTerm ? "long" : "short"}-term</span>` : "—"}</td>
+      <td class="hint">${t.closed_at ? ago(t.closed_at) : "—"}</td></tr>`;
+    }).join("")}</tbody></table>`
     : '<div class="hint">No closed trades yet.</div>';
 
   document.querySelectorAll("[data-exit]").forEach((b) => b.addEventListener("click", () => {
@@ -601,7 +606,48 @@ async function loadPerformance() {
     <div class="tile"><div class="v">${T.closed}</div><div class="l">closed trades</div></div>
     <div class="tile"><div class="v ${T.win_rate >= 50 ? "up" : T.win_rate == null ? "" : "down"}">${T.win_rate != null ? T.win_rate + "%" : "—"}</div><div class="l">win rate</div></div>
     <div class="tile"><div class="v ${cls(T.total_pnl)}">$${fmtP(T.total_pnl, 2)}</div><div class="l">total P&L</div></div>
-    <div class="tile"><div class="v ${cls(T.avg_pnl_pct)}">${fmtPct(T.avg_pnl_pct)}</div><div class="l">avg per trade</div></div>`;
+    <div class="tile"><div class="v ${cls(T.avg_pnl_pct)}">${fmtPct(T.avg_pnl_pct)}</div><div class="l">avg per trade</div></div>
+    ${T.by_term ? `<div class="tile"><div class="v ${cls(T.by_term.short.pnl)}">$${fmtP(T.by_term.short.pnl, 0)}</div><div class="l">short-term P&L (${T.by_term.short.count})</div></div>
+    <div class="tile"><div class="v ${cls(T.by_term.long.pnl)}">$${fmtP(T.by_term.long.pnl, 0)}</div><div class="l">long-term P&L (${T.by_term.long.count})</div></div>` : ""}`;
+  loadEquityCurve();
+}
+
+// Equity curves: realized account curve + the "what if I took every rec" paper curve.
+let equityChart = null;
+async function loadEquityCurve() {
+  const el = $("equity-chart");
+  try {
+    const e = await api("/api/portfolio/equity");
+    const A = e.actual, W = e.what_if;
+    if (!A.series.length && !W.series.length) {
+      $("equity-tiles").innerHTML = "";
+      el.style.display = "none";
+      $("equity-note").textContent = "Builds as trades close and recommendations finish.";
+      return;
+    }
+    el.style.display = "";
+    const tile = (label, st, extra = "") => st ? `
+      <div class="tile"><div class="v ${cls(st.pnl)}">$${fmtP(st.final_equity, 0)}</div><div class="l">${label} equity</div></div>
+      <div class="tile"><div class="v ${cls(st.return_pct)}">${fmtPct(st.return_pct)}</div><div class="l">${label} return${extra}</div></div>` : "";
+    $("equity-tiles").innerHTML = `
+      <div class="tile"><div class="v">$${fmtP(e.starting_equity, 0)}</div><div class="l">starting size</div></div>
+      ${tile("realized", A.stats)}
+      ${tile("what-if", W.stats, ` · DD −${W.stats ? W.stats.max_drawdown_pct : 0}%`)}`;
+    if (equityChart) { try { equityChart.remove(); } catch (_) {} equityChart = null; }
+    equityChart = mkChart(el);
+    if (A.series.length) {
+      const s = equityChart.addAreaSeries({ lineColor: "#34d399", topColor: "rgba(52,211,153,.25)", bottomColor: "rgba(52,211,153,.02)", lineWidth: 2, title: "realized" });
+      s.setData(A.series);
+    }
+    if (W.series.length) {
+      const s = equityChart.addLineSeries({ color: "#38bdf8", lineWidth: 1.6, lineStyle: 2, title: "what-if" });
+      s.setData(W.series);
+    }
+    equityChart.timeScale().fitContent();
+    $("equity-note").textContent = `Dashed what-if line: ${W.note}. Risk sizing ${e.risk_per_trade_pct}%/trade on $${fmtP(e.starting_equity, 0)}.`;
+  } catch (err) {
+    $("equity-note").textContent = "⚠ " + err.message;
+  }
 }
 
 // Threshold backtester.
@@ -926,7 +972,7 @@ async function loadSettings() {
     <div class="frow check vgroup"><input type="checkbox" id="v-tab-watchlist" ${s.view.tabs.watchlist !== false ? "checked" : ""}><label for="v-tab-watchlist"><b>Watchlist</b></label></div>
     <div class="frow check vgroup"><input type="checkbox" id="v-tab-trades" ${s.view.tabs.trades !== false ? "checked" : ""}><label for="v-tab-trades"><b>Trades</b></label></div>
     <div class="frow check vgroup"><input type="checkbox" id="v-tab-performance" ${s.view.tabs.performance !== false ? "checked" : ""}><label for="v-tab-performance"><b>Performance</b></label></div>
-    ${Object.entries({ rec_performance: "Recommendation performance", your_trades: "Your trades", calibration: "Confidence calibration", backtest: "Threshold backtest" }).map(([k, label]) =>
+    ${Object.entries({ rec_performance: "Recommendation performance", your_trades: "Your trades", equity: "Equity curve", calibration: "Confidence calibration", backtest: "Threshold backtest" }).map(([k, label]) =>
       `<div class="frow check sub-check"><input type="checkbox" id="v-perf-${k}" ${s.view.performance[k] !== false ? "checked" : ""}><label for="v-perf-${k}">${label}</label></div>`).join("")}
     <div class="save-row"><button class="primary" id="save-view">Save</button><span id="note-view"></span></div>
   </div>
@@ -1084,7 +1130,7 @@ async function loadSettings() {
       await api("/api/settings/view", { method: "PUT", body: JSON.stringify({
         tabs: pick("v-tab-", ["recommendations", "charts", "watchlist", "trades", "performance"]),
         dashboard: pick("v-dash-", ["briefing", "sentiment", "success", "latest_recs", "headlines", "activity"]),
-        performance: pick("v-perf-", ["rec_performance", "your_trades", "calibration", "backtest"]),
+        performance: pick("v-perf-", ["rec_performance", "your_trades", "equity", "calibration", "backtest"]),
       }) });
       await loadAppSettings(); applyView();
       note("note-view", "Saved ✓ — view updated");
@@ -1293,7 +1339,7 @@ chatText.addEventListener("keydown", (e) => {
 const VIEW_MAP = {
   tabs: { recommendations: "recs", charts: "charts", watchlist: "watchlist", trades: "trades", performance: "performance" },
   dashboard: { briefing: "card-briefing", sentiment: "card-sentiment", success: "card-success", latest_recs: "card-latest", headlines: "card-news", activity: "card-events" },
-  performance: { rec_performance: "card-perf-recs", your_trades: "card-perf-trades", calibration: "card-perf-cal", backtest: "card-perf-bt" },
+  performance: { rec_performance: "card-perf-recs", your_trades: "card-perf-trades", equity: "card-perf-equity", calibration: "card-perf-cal", backtest: "card-perf-bt" },
 };
 function applyView() {
   const v = appSettings && appSettings.view;

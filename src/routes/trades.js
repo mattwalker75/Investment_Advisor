@@ -216,17 +216,28 @@ router.get("/portfolio/concentration", async (_req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Equity curves: realized account curve + the what-if-every-rec-was-taken paper curve.
+router.get("/portfolio/equity", async (_req, res) => {
+  try { res.json(await require("../engine/portfolio").equityCurves()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 router.get("/export/trades.csv", async (_req, res) => {
   const rows = await db.all("SELECT * FROM trades ORDER BY id");
-  const out = rows.map((t) => ({
-    id: t.id, symbol: t.symbol, asset_type: t.asset_type, side: t.side, qty: t.qty,
-    entry_price: t.entry_price, entry_date: new Date(Number(t.entry_at)).toISOString().slice(0, 10),
-    stop_loss: t.stop_loss, status: t.status, pnl: t.pnl, pnl_pct: t.pnl_pct,
-    closed_date: t.closed_at ? new Date(Number(t.closed_at)).toISOString().slice(0, 10) : "",
-    option: t.option_details || "", exits: (J(t.exits, []) || []).filter((e) => !e.alert).map((e) => `${e.qty}@${e.price}`).join("; "),
-  }));
+  const out = rows.map((t) => {
+    // Holding period for tax: short-term under 365 days, long-term at/over.
+    const held = t.closed_at ? Math.max(0, Math.round((Number(t.closed_at) - Number(t.entry_at)) / 86400000)) : "";
+    return {
+      id: t.id, symbol: t.symbol, asset_type: t.asset_type, side: t.side, qty: t.qty,
+      entry_price: t.entry_price, entry_date: new Date(Number(t.entry_at)).toISOString().slice(0, 10),
+      stop_loss: t.stop_loss, status: t.status, pnl: t.pnl, pnl_pct: t.pnl_pct,
+      closed_date: t.closed_at ? new Date(Number(t.closed_at)).toISOString().slice(0, 10) : "",
+      holding_days: held, tax_term: t.closed_at ? (held >= 365 ? "long" : "short") : "",
+      option: t.option_details || "", exits: (J(t.exits, []) || []).filter((e) => !e.alert).map((e) => `${e.qty}@${e.price}`).join("; "),
+    };
+  });
   res.setHeader("Content-Disposition", "attachment; filename=trades.csv");
-  res.type("text/csv").send(toCsv(out, ["id", "symbol", "asset_type", "side", "qty", "entry_price", "entry_date", "stop_loss", "status", "pnl", "pnl_pct", "closed_date", "option", "exits"]));
+  res.type("text/csv").send(toCsv(out, ["id", "symbol", "asset_type", "side", "qty", "entry_price", "entry_date", "stop_loss", "status", "pnl", "pnl_pct", "closed_date", "holding_days", "tax_term", "option", "exits"]));
 });
 
 module.exports = router;
