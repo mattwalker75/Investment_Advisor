@@ -76,15 +76,18 @@ async function projectionCone(symbol, horizon, { interval = "1d" } = {}) {
   const h = HORIZONS[horizon];
   if (!h) throw new Error(`unknown horizon "${horizon}" — use one of: ${Object.keys(HORIZONS).join(" ")}`);
   // Vol estimation: prefer the horizon's natural timeframe, fall back to daily scaled.
+  // Crypto trades around the clock: annualizing its hourly vol with equity trading
+  // hours (252×6.5) understated intraday ranges ~1.9×.
+  const cryptoClock = /-USD$/.test(symbol);
   let candles = null, perYear, timeframe = h.timeframe;
   if (timeframe === "1h") {
     candles = await yahoo.history(symbol, 12, "1h").catch(() => null);
-    perYear = 252 * 6.5;
+    perYear = cryptoClock ? 365 * 24 : 252 * 6.5;
     if (!candles || candles.length < 40) { timeframe = "1d"; candles = null; }
   }
   if (!candles) {
     candles = await yahoo.history(symbol, 365, "1d");
-    perYear = 252;
+    perYear = cryptoClock ? 365 : 252;
   }
   const closes = candles.map((c) => c.close);
   const S = closes[closes.length - 1];

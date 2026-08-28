@@ -81,6 +81,35 @@ test("validateOptionRec: insane model numbers get replaced with sane defaults", 
   assert.ok(r.stop_loss < r.entry_low, "stop re-anchored below entry");
 });
 
+test("optionPremium: intrinsic fallback when a leg left the near-money window (deep-ITM winners keep tracking)", async () => {
+  const { stubModule } = require("./helpers");
+  const state = { chain: sampleChain() };
+  stubModule("providers/yahoo.js", { optionsChain: async () => state.chain });
+  // leg present → chain-mid pricing
+  const live = await opt.optionPremium({ symbol: "NVDA", options_play: { strategy: "long_call", strikes: [125], expiry: "2099-10-16" } });
+  assert.strictEqual(live.premium, 3.5);
+  // underlying rallied: 125C no longer in the ±15% window, spot 160 → intrinsic 35
+  state.chain = { ...sampleChain(), spot: 160, calls: [{ strike: 155, bid: 9, ask: 9.4, iv: 40, open_interest: 10 }], puts: [] };
+  const deep = await opt.optionPremium({ symbol: "NVDA", options_play: { strategy: "long_call", strikes: [125], expiry: "2099-10-16" } });
+  assert.strictEqual(deep.premium, 35, "must fall back to intrinsic, not null");
+  assert.match(deep.approx || "", /intrinsic/);
+  state.chain = sampleChain();
+});
+
+test("tradePremium: spreads price NET across all legs, single-leg trades still work", async () => {
+  const spread = await opt.tradePremium({ symbol: "NVDA", option_details: { strategy: "call_spread", strikes: [120, 130], type: "call", strike: 120, expiry: "2099-10-16" } });
+  assert.strictEqual(spread.premium, 4, "net debit 6.0 − 2.0, never the long leg alone");
+  const single = await opt.tradePremium({ symbol: "NVDA", option_details: { type: "call", strike: 125, expiry: "2099-10-16" } });
+  assert.strictEqual(single.premium, 3.5);
+});
+
+test("validateOptionRec: horizon is hard-capped by DTE even on a 1-DTE chain", () => {
+  const shortChain = { ...sampleChain(), dte: 1 };
+  const m = { NVDA: { symbol: "NVDA", asset_type: "stock", name: "NVIDIA", price: 120, options_chain: shortChain } };
+  const r = opt.validateOptionRec({ symbol: "NVDA", strategy: "long_call", strikes: [125], confidence: 0.7, horizon_max_days: 30, rationale: "t" }, m, prefs);
+  assert.ok(r && r.horizon_max_days <= 1, "horizon_max " + (r && r.horizon_max_days));
+});
+
 test("validateOptionRec: the gauntlet rejects", () => {
   const cases = [
     [{ symbol: "NVDA", strategy: "covered_call", strikes: [125], confidence: 0.9 }, "disallowed strategy"],

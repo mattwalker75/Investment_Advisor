@@ -296,15 +296,35 @@ function suggestStop(t, candles, targetsHitCount) {
 }
 
 // --- 2. Watch taken trades (alerts only; exits are recorded by the user) ---
+// PRICE SPACE matters: a trade taken from a FIRST-CLASS option rec carries
+// premium-denominated stop/targets (option_details.premium_levels) and must be priced
+// off the chain's net premium — checking premium levels against the underlying quote
+// fired instant false stop/target alerts. Attached-play and manual option trades keep
+// underlying-level plans and price off the quote as before.
 async function trackTrades() {
   const trades = await db.all("SELECT * FROM trades WHERE status='open'");
   if (!trades.length) return { checked: 0 };
+  const optionsEngine = require("./options");
   const quotes = await yahoo.quotes([...new Set(trades.map(yahooSym))]);
+  const premiumById = {};
+  for (const t of trades) {
+    if (t.asset_type !== "option") continue;
+    const od = J(t.option_details, null);
+    if (od && od.premium_levels) {
+      const p = await optionsEngine.tradePremium(t).catch(() => null);
+      if (p && p.premium != null) premiumById[t.id] = p.premium;
+    }
+  }
 
   for (const t of trades) {
+    const od = t.asset_type === "option" ? J(t.option_details, null) : null;
+    const premiumLevels = !!(od && od.premium_levels);
     const q = quotes[yahooSym(t)];
-    if (!q || q.price == null) continue;
-    const price = q.price;
+    const price = premiumLevels ? premiumById[t.id] : (q && q.price != null ? q.price : null);
+    if (price == null) {
+      // premium unavailable this pass (chain gap): still run the expiry countdown below
+      if (!premiumLevels) continue;
+    }
     const targets = J(t.targets, []);
     // Alert de-dup: fired alerts are recorded as {alert} marker entries in `exits`.
     const exits = J(t.exits, []) || [];
@@ -317,12 +337,15 @@ async function trackTrades() {
       await logEvent(type || (key.startsWith("stop") ? "stop_hit" : "target_hit"), "trade", t.id, t.symbol, msg);
     };
 
-    const stopCrossed = t.side === "buy" ? price <= t.stop_loss : price >= t.stop_loss;
-    if (t.stop_loss && stopCrossed) await pushAlert("stop", `⚠️ ${t.symbol} crossed your STOP ${t.stop_loss} (now ${price}) — review the position`);
     let targetsHit = 0;
-    for (const [i, tg] of targets.entries()) {
-      const crossed = t.side === "buy" ? price >= tg.price : price <= tg.price;
-      if (crossed) { targetsHit++; await pushAlert(`target${i}`, `🎯 ${t.symbol} reached target ${i + 1} @ ${tg.price} (sell ${tg.sell_pct}% per plan) — now ${price}`); }
+    if (price != null) {   // (premium may be unavailable this pass — expiry countdown still runs)
+      const unit = premiumLevels ? " premium" : "";
+      const stopCrossed = t.side === "buy" ? price <= t.stop_loss : price >= t.stop_loss;
+      if (t.stop_loss && stopCrossed) await pushAlert("stop", `⚠️ ${t.symbol} crossed your STOP${unit} ${t.stop_loss} (now ${price}) — review the position`);
+      for (const [i, tg] of targets.entries()) {
+        const crossed = t.side === "buy" ? price >= tg.price : price <= tg.price;
+        if (crossed) { targetsHit++; await pushAlert(`target${i}`, `🎯 ${t.symbol} reached${unit} target ${i + 1} @ ${tg.price} (sell ${tg.sell_pct}% per plan) — now ${price}`); }
+      }
     }
 
     // Options: expiry countdown alerts (theta is a schedule, not a surprise).

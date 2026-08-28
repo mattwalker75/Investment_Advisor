@@ -78,6 +78,26 @@ test("option rec: prices off the live net premium, same state machine", async ()
   market.chain = sampleChain();
 });
 
+test("option TRADE with premium_levels: alerts price off the chain, never the underlying quote", async () => {
+  await db.run(
+    "INSERT INTO trades (rec_id,created_at,asset_type,symbol,side,qty,entry_price,entry_at,stop_loss,targets,option_details,status) VALUES (NULL,?,'option','NVDA','buy',1,3.5,?,1.8,?,?,'open')",
+    [Date.now(), Date.now(), JSON.stringify([{ price: 7, sell_pct: 100 }]),
+     JSON.stringify({ type: "call", strategy: "long_call", strike: 125, strikes: [125], expiry: "2099-10-16", premium_levels: true })]);
+  const { id } = await db.get("SELECT id FROM trades WHERE asset_type='option' ORDER BY id DESC LIMIT 1");
+  market.quotes.NVDA = { price: 130 };            // underlying 130 vs premium target 7.0 — must NOT fire
+  await tracker.trackTrades();
+  let t = await db.get("SELECT exits FROM trades WHERE id=?", [id]);
+  assert.strictEqual((J(t.exits, []) || []).filter((e) => e.alert && /^(target|stop)/.test(e.alert)).length, 0,
+    "premium-level plan must never be checked against the underlying quote");
+  // net premium rallies to 7.5 → the premium target alert fires
+  market.chain = { ...sampleChain(), calls: sampleChain().calls.map((c) => (c.strike === 125 ? { ...c, bid: 7.4, ask: 7.6 } : c)) };
+  await tracker.trackTrades();
+  t = await db.get("SELECT exits FROM trades WHERE id=?", [id]);
+  assert.ok((J(t.exits, []) || []).some((e) => e.alert === "target0"), "premium target alert fires at chain mid 7.5");
+  market.chain = sampleChain();
+  await db.run("DELETE FROM trades");
+});
+
 test("option rec at expiry: tracking settles at intrinsic (expired_settled), open expires", async () => {
   const past = "2000-01-01";
   const mk = (sym, status, outcome) => db.run(

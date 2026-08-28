@@ -79,7 +79,12 @@ router.post("/recommendations/:id/take", async (req, res) => {
         type: /put/.test(play.strategy) ? "put" : "call",
         strategy: play.strategy,
         strike: (play.strikes && play.strikes[0]) || null,
+        strikes: Array.isArray(play.strikes) ? play.strikes : null,   // ALL legs (spreads price net)
         expiry: play.chain_expiry || play.expiry || null,
+        // First-class option recs (asset_type 'option') carry PREMIUM-denominated
+        // stop/targets/entry; attached plays carry UNDERLYING levels. Consumers
+        // (tracker alerts, trades pricing) must know which space they're in.
+        premium_levels: r.asset_type === "option" || undefined,
       };
     }
     const t = await db.run(
@@ -106,8 +111,17 @@ router.post("/recommendations/:id/complete", async (req, res) => {
     const outcome = J(r.outcome, {}) || {};
     outcome.result = "completed_by_user"; outcome.exit_at = Date.now();
     if (r.status === "tracking" && outcome.entry_price != null) {
-      const q = await yahoo.quote(yahooSym(r)).catch(() => null);
-      const price = (q && q.price) ?? outcome.last_price ?? outcome.entry_price;
+      // Residual price must live in the SAME space as the ladder: option recs are
+      // premium-denominated — grading them at the underlying quote produced absurd
+      // P&L that poisoned the honest stats.
+      let price;
+      if (r.asset_type === "option") {
+        const p = await require("../engine/options").optionPremium(r).catch(() => null);
+        price = (p && p.premium) ?? outcome.last_price ?? outcome.entry_price;
+      } else {
+        const q = await yahoo.quote(yahooSym(r)).catch(() => null);
+        price = (q && q.price) ?? outcome.last_price ?? outcome.entry_price;
+      }
       outcome.pnl_pct = ladderPnl(outcome.entry_price, outcome.targets_hit || [], J(r.targets, []), price, r.side);
       outcome.exit_price = price;
     }

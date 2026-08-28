@@ -33,7 +33,10 @@ async function positionFacts(t, heads) {
     symbol: t.symbol, asset_type: t.asset_type, side: t.side,
     option: od ? { type: od.type, strike: od.strike, expiry: od.expiry, days_to_expiry: od.expiry ? Math.round((Date.parse(od.expiry) - now()) / 86400000) : null } : null,
     entry_price: t.entry_price, current_price: price,
-    unrealized_pct: price != null ? +(((price - t.entry_price) / t.entry_price) * 100 * dir).toFixed(2) : null,
+    // Options: entry_price is the PREMIUM/share while `price` is the underlying — a
+    // quote-based percentage would be nonsense, so options report null here (the
+    // option block + days_to_expiry carry the position context instead).
+    unrealized_pct: price != null && t.asset_type !== "option" ? +(((price - t.entry_price) / t.entry_price) * 100 * dir).toFixed(2) : null,
     stop_loss: t.stop_loss,
     stop_distance_pct: price != null && t.stop_loss ? +((Math.abs(price - t.stop_loss) / price) * 100).toFixed(2) : null,
     targets: J(t.targets, []),

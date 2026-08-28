@@ -6,7 +6,9 @@ const assert = require("node:assert");
 const { stubModule, syntheticCandles } = require("./helpers");
 
 const candles = syntheticCandles(400);
-stubModule("providers/yahoo.js", { history: async () => candles });
+// hourly fixture: epoch-second times (as real intraday candles use)
+const hourly = candles.slice(0, 350).map((c, i) => ({ ...c, time: 1720000000 + i * 3600 }));
+stubModule("providers/yahoo.js", { history: async (_s, _d, interval) => (interval === "1h" ? hourly : candles) });
 stubModule("providers/coingecko.js", { topCoins: async () => [{ yahoo: "BTC-USD" }, { yahoo: "ETH-USD" }] });
 const lab = require("../src/engine/strategylab");
 
@@ -70,6 +72,16 @@ test("runStrategy: option instrument is model-priced and labeled", async () => {
   assert.ok(r.model_priced_note, "model-priced label required");
   const t = r.by_symbol[0].last_trades[0];
   assert.ok(t.model_priced && t.premium_entry > 0, "trades carry premium metadata");
+});
+
+test("runStrategy: 1h strategies get a walk-forward split too (epoch-second dates)", async () => {
+  const r = await lab.runStrategy({ ...BASE, timeframe: "1h", days: 60,
+    exit: { ...BASE.exit, max_hold_bars: 20 } });
+  assert.ok(r.total_trades > 0, "1h run should trade");
+  if (r.total_trades >= 10) {
+    assert.ok(r.walk_forward, "walk-forward must not silently vanish on intraday timestamps");
+    assert.strictEqual(r.walk_forward.in_sample.trades + r.walk_forward.out_of_sample.trades, r.total_trades);
+  }
 });
 
 test("runStrategy: crypto universe resolves through the coin provider", async () => {

@@ -45,15 +45,25 @@ router.get("/trades", async (req, res) => {
         try {
           const od = t.option_details;
           const chain = chains[`${t.symbol} ${od.expiry || ""}`];
-          const leg = chain && (od.type === "put" ? chain.puts : chain.calls || []).find((o) => Math.abs(o.strike - od.strike) < 0.01);
-          if (leg) {
-            const mid = leg.bid && leg.ask ? (leg.bid + leg.ask) / 2 : leg.last;
-            if (mid != null) {
-              t.last_price = +mid.toFixed(2);   // premium per share
-              const realized = t.exits.reduce((s, e) => s + dir * (e.price - t.entry_price) * (e.qty || 0) * 100, 0);
-              t.unrealized_pnl = +(realized + dir * (mid - t.entry_price) * remaining * 100).toFixed(2);
-              t.unrealized_pnl_pct = +((t.unrealized_pnl / (t.entry_price * t.qty * 100)) * 100).toFixed(2);
+          // NET premium across ALL legs — a spread priced at its long leg alone showed
+          // wildly overstated P&L. Deep-ITM legs missing from the near-money chain
+          // window fall back to intrinsic value.
+          let mid = null;
+          if (chain) {
+            const optionsEngine = require("../engine/options");
+            const strategy = od.strategy && optionsEngine.LEGS[od.strategy] ? od.strategy : (od.type === "put" ? "long_put" : "long_call");
+            const strikes = Array.isArray(od.strikes) && od.strikes.length ? od.strikes : (od.strike != null ? [od.strike] : null);
+            if (strikes) {
+              const priced = optionsEngine.netPremium(strategy, chain, strikes);
+              if (priced) mid = priced.net;
+              else if (chain.spot != null) mid = Math.max(0.01, optionsEngine.settlementPremium(strategy, strikes, chain.spot));
             }
+          }
+          if (mid != null) {
+            t.last_price = +mid.toFixed(2);   // net premium per share
+            const realized = t.exits.reduce((s, e) => s + dir * (e.price - t.entry_price) * (e.qty || 0) * 100, 0);
+            t.unrealized_pnl = +(realized + dir * (mid - t.entry_price) * remaining * 100).toFixed(2);
+            t.unrealized_pnl_pct = +((t.unrealized_pnl / (t.entry_price * t.qty * 100)) * 100).toFixed(2);
           }
           if (od.expiry) t.days_to_expiry = Math.round((Date.parse(od.expiry) - Date.now()) / 86400000);
         } catch (_) {}

@@ -56,6 +56,10 @@ async function congressFeed(pages = 4) {
         jobs.push(pull("house-latest", "house", p).catch(() => []));
       }
       const rows = (await Promise.all(jobs)).flat();
+      // An all-empty pull means the provider failed/declined — DON'T cache it for 12h
+      // (a cached empty feed would make every old filing look "new" after recovery,
+      // flooding followed-figure alerts). Throwing keeps the cache untouched.
+      if (!rows.length) throw new Error("empty congress feed (provider down or key rejected)");
       // de-dup (same filing can appear across page pulls) + newest first
       const seen = new Set();
       return rows.filter((t) => {

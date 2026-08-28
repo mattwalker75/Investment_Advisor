@@ -4,6 +4,25 @@ All notable changes to Investment Advisor are tracked here.
 
 ## [Unreleased]
 
+### Fixed (re-analysis round 3)
+- 2026-08-28: Independent fresh-eyes review of the batch 4–6 code; 12 issues fixed. The
+  big three shared one root — consumers assuming underlying-denominated levels on
+  premium-denominated first-class option recs: completing a tracking option rec graded
+  at the underlying quote (absurd P&L in the honest stats), trackTrades fired instant
+  false stop/target alerts on taken option recs, and spreads were taken/priced as a
+  single leg. Trades from first-class option recs now carry
+  `option_details.premium_levels` + full strikes and price off the chain's NET premium
+  everywhere. Also: intrinsic-value fallback keeps deep-ITM option recs tracking when a
+  leg leaves the near-money chain window; a failed briefing no longer loses queued
+  digest alerts (clear only after success); figure-follow baselines only from non-empty
+  data and empty congress feeds are never cached (no stale-filing floods); 1h-strategy
+  walk-forward no longer vanishes (epoch-second dates); "BTC" price rules track Bitcoin
+  not the NYSE ticker; manage_alerts duplicate detection works; crypto hourly cones use
+  the 24/7 clock (~1.9× wider, honestly); option horizons hard-capped by DTE; health
+  facts drop nonsense option unrealized%; alerts merge-by-id on save (mid-pass edits
+  survive); cone axis matches its horizon (1-week cones no longer stretched over 24
+  days). 6 new regression tests (83 total).
+
 ### Added (batch 6)
 - 2026-08-28: **Notable-figure tracking.** A deep congressional feed (Senate + House,
   multiple pages, deduped) with per-person views ("Pelosi" works), a most-active list,

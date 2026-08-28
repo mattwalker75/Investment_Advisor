@@ -341,14 +341,17 @@ async function runStrategy(rawSpec, opt = {}) {
   const all = results.flatMap((r) => r.all_trades || [])
     .sort((a, b) => String(a.date).localeCompare(String(b.date)));
   for (const r of results) delete r.all_trades;
-  // walk-forward: most recent 30% of the traded date span is out-of-sample
+  // walk-forward: most recent 30% of the traded date span is out-of-sample.
+  // Intraday trades stamp epoch SECONDS (Date.parse would NaN on them and silently
+  // drop the split for every 1h strategy).
+  const ts = (d) => (typeof d === "number" ? d * 1000 : Date.parse(d));
   let walk_forward = null;
   if (all.length >= 10) {
-    const t0 = Date.parse(all[0].date), t1 = Date.parse(all[all.length - 1].date);
+    const t0 = ts(all[0].date), t1 = ts(all[all.length - 1].date);
     if (isFinite(t0) && isFinite(t1) && t1 > t0) {
       const cutoff = t0 + (t1 - t0) * 0.7;
-      const inS = all.filter((t) => Date.parse(t.date) < cutoff);
-      const oos = all.filter((t) => Date.parse(t.date) >= cutoff);
+      const inS = all.filter((t) => ts(t.date) < cutoff);
+      const oos = all.filter((t) => ts(t.date) >= cutoff);
       if (inS.length && oos.length) walk_forward = {
         cutoff_date: new Date(cutoff).toISOString().slice(0, 10),
         in_sample: metrics(inS), out_of_sample: metrics(oos),

@@ -36,7 +36,9 @@ async function gather() {
   }
   const recs = await db.all("SELECT symbol, side, status, entry_low, entry_high, stop_loss, confidence, created_at FROM recommendations WHERE status IN ('open','tracking') ORDER BY id DESC LIMIT 12");
   // Digest-delivery alert-rule hits queue up here instead of buzzing individually.
-  const digest = await require("./alerts").drainDigest().catch(() => []);
+  // PEEK only — the queue clears after a SUCCESSFUL generation (see run()), so a failed
+  // model call never loses queued alerts.
+  const digest = await require("./alerts").peekDigest().catch(() => []);
   return {
     as_of: new Date().toString(),
     market: { quotes, sentiment: senti, headlines: heads.map((h) => h.title) },
@@ -61,6 +63,7 @@ Be specific with numbers. No fluff, no disclaimers, no greetings.` },
   const text = (content || "").trim();
   if (!text) throw new Error("empty briefing from model");
   await logEvent("briefing", "briefing", null, null, text);
+  await require("./alerts").clearDigest().catch(() => {});   // delivered — now the queue may clear
   console.log(`[briefing] generated (${trigger}), ${text.length} chars`);
   return { text };
 }

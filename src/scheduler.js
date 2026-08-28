@@ -90,7 +90,7 @@ function start() {
     } catch (e) { console.error("[scheduler] backup failed:", e.message); }
   };
   timers.push(setInterval(backupTick, 30 * 60 * 1000));
-  setTimeout(backupTick, 90 * 1000);
+  timers.push(setTimeout(backupTick, 90 * 1000));   // clearInterval clears timeouts too — stop() covers it
 
   // Daily AI briefing at the configured local hour.
   let lastBriefing = 0;

@@ -170,7 +170,8 @@ function validateOptionRec(r, candidateMap, prefs) {
     stop_loss: +stop.toFixed(2),
     targets,
     horizon_min_days: Math.max(1, Math.min(Math.round(r.horizon_min_days || 5), chain.dte || 30)),
-    horizon_max_days: Math.max(2, Math.min(Math.round(r.horizon_max_days || chain.dte || 30), chain.dte || 30)),
+    // DTE is the hard ceiling — even for a 1-DTE chain (the old Math.max(2,…) could exceed it).
+    horizon_max_days: Math.min(Math.max(1, chain.dte || 30), Math.max(2, Math.round(r.horizon_max_days || chain.dte || 30))),
     confidence: +conf.toFixed(2),
     risk_reward: rr,
     rationale: String(r.rationale || "").slice(0, 2000),
@@ -272,7 +273,10 @@ async function saveOptionRec(rec, { runId = null, inputs = null } = {}) {
 
 // --- Premium pricing + expiry settlement for the shadow-tracker ---
 
-// Live net premium for an option rec (per share). Null when the chain/legs are gone.
+// Live net premium for an option rec (per share). When a leg has drifted outside the
+// fetched near-money strike window (deep ITM winners do exactly this), fall back to
+// INTRINSIC value off the spot — otherwise winners silently stopped tracking right as
+// they hit their targets.
 async function optionPremium(rec) {
   const yahoo = require("../providers/yahoo");
   const play = typeof rec.options_play === "string" ? J(rec.options_play, null) : rec.options_play;
@@ -281,8 +285,24 @@ async function optionPremium(rec) {
     const chain = await yahoo.optionsChain(rec.symbol, 365, play.expiry);
     if (!chain) return null;
     const priced = netPremium(play.strategy, chain, play.strikes);
-    return priced ? { premium: priced.net, underlying: chain.spot ?? null } : null;
+    if (priced) return { premium: priced.net, underlying: chain.spot ?? null };
+    if (chain.spot != null) {
+      const intrinsic = settlementPremium(play.strategy, play.strikes, chain.spot);
+      return { premium: +Math.max(0.01, intrinsic).toFixed(2), underlying: chain.spot, approx: "intrinsic (leg outside the fetched strike window)" };
+    }
+    return null;
   } catch (_) { return null; }
+}
+
+// Same, for a TRADE row's option_details (used by the trades route + tracker for
+// positions taken from first-class option recs — spreads price NET, never one leg).
+async function tradePremium(t) {
+  const od = typeof t.option_details === "string" ? J(t.option_details, null) : t.option_details;
+  if (!od) return null;
+  const strategy = od.strategy && LEGS[od.strategy] ? od.strategy : (od.type === "put" ? "long_put" : "long_call");
+  const strikes = Array.isArray(od.strikes) && od.strikes.length ? od.strikes : (od.strike != null ? [od.strike] : null);
+  if (!strikes) return null;
+  return optionPremium({ symbol: t.symbol, options_play: { strategy, strikes, expiry: od.expiry } });
 }
 
 // True once the option's expiry day is over (chains settle ~21:00 UTC).
@@ -292,6 +312,6 @@ function isExpired(play, nowMs = Date.now()) {
 }
 
 module.exports = {
-  validateOptionRec, recommendOptions, saveOptionRec, optionPremium,
+  validateOptionRec, recommendOptions, saveOptionRec, optionPremium, tradePremium,
   netPremium, economics, settlementPremium, atmIv, isExpired, CREDIT, LEGS,
 };

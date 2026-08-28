@@ -94,6 +94,19 @@ test("figure_filing: first pass baselines silently, new filings fire after", asy
   assert.match(row.message, /MSFT/);
 });
 
+test("figure_filing: an EMPTY feed never baselines (no stale-filing flood after recovery)", async () => {
+  figures.trades = [];
+  await alerts.saveRules([alerts.validateRule({ type: "figure_filing", params: { name: "Crenshaw" }, cooldown_min: 5 })]);
+  await alerts.evaluateRules();                              // provider down — must NOT baseline
+  figures.trades = [{ politician: "Dan Crenshaw", chamber: "house", ticker: "XOM", action: "buy", amount: "$15K-$50K", traded_at: "2026-07-10", disclosed_at: "2026-08-20", option: null }];
+  const recovery = await alerts.evaluateRules();             // first REAL data = silent baseline
+  assert.strictEqual(recovery.fired, 0, "recovery pass baselines silently, no stale-filing spam");
+  figures.trades = [{ politician: "Dan Crenshaw", chamber: "house", ticker: "CVX", action: "buy", amount: "$1K-$15K", traded_at: "2026-08-15", disclosed_at: "2026-08-28", option: null }, ...figures.trades];
+  const fresh = await alerts.evaluateRules();
+  assert.strictEqual(fresh.fired, 1, "genuinely new filing fires");
+  figures.trades = [];
+});
+
 test("digest delivery queues for the briefing instead of alerting, and drains once", async () => {
   await alerts.saveRules([alerts.validateRule({ type: "provider_degraded", delivery: "digest", cooldown_min: 5 })]);
   market.health.yahoo_cooling_down = true;

@@ -458,7 +458,9 @@ async function execTool(name, args = {}) {
         case "list": return rules.map((r) => ({ id: r.id, label: alerts.label(r), type: r.type, params: r.params, enabled: r.enabled, delivery: r.delivery, cooldown_min: r.cooldown_min }));
         case "add": {
           const v = alerts.validateRule(args.rule || {});
-          if (rules.some((r) => r.id === v.id)) return { error: "an identical rule already exists" };
+          // ids embed a timestamp — duplicates must be detected by type+params
+          if (rules.some((r) => r.type === v.type && JSON.stringify(r.params) === JSON.stringify(v.params)))
+            return { error: "an identical rule already exists: " + alerts.label(v) };
           rules.push(v);
           await alerts.saveRules(rules);
           return { ok: true, added: alerts.label(v), id: v.id, note: "Evaluated every ~5 minutes; fires through the feed, browser, and webhook (per the user's gates)." };

@@ -114,11 +114,19 @@ async function fire(rule, subKey, message) {
   return true;
 }
 
-// The daily briefing pulls queued digest hits and clears the queue.
-async function drainDigest() {
+// The daily briefing PEEKS at queued digest hits while composing, and clears them only
+// AFTER a successful generation — a failed LLM call must never lose queued alerts.
+async function peekDigest() {
   const row = await db.get("SELECT value FROM settings WHERE `key`=?", [DIGEST_KEY]).catch(() => null);
   const q = (row ? J(row.value, []) : []) || [];
-  if (q.length) await db.run(db.upsertSql("settings", ["key", "value", "updated_at"], "key"), [DIGEST_KEY, "[]", Date.now()]);
+  return Array.isArray(q) ? q : [];
+}
+async function clearDigest() {
+  await db.run(db.upsertSql("settings", ["key", "value", "updated_at"], "key"), [DIGEST_KEY, "[]", Date.now()]);
+}
+async function drainDigest() {   // peek + clear in one step (tests / manual use)
+  const q = await peekDigest();
+  if (q.length) await clearDigest();
   return q;
 }
 
@@ -130,11 +138,14 @@ async function evaluateRules() {
   const yahoo = require("../providers/yahoo");
   let fired = 0;
 
-  // batch quotes for all symbol-ish rules in one call
+  // batch quotes for all symbol-ish rules in one call. Bare crypto-looking symbols also
+  // fetch their -USD pair — a "BTC" rule should track Bitcoin, not the same-lettered
+  // NYSE ticker (qOf prefers the -USD quote when both exist).
   const wantQuotes = new Set();
+  const addSym = (s) => { if (!s) return; wantQuotes.add(s); if (!s.includes("-")) wantQuotes.add(s + "-USD"); };
   for (const r of rules) {
-    if ((r.type === "price_above" || r.type === "price_below") && r.params.symbol) wantQuotes.add(r.params.symbol);
-    if (r.type === "pct_move_day" && r.params.scope === "symbol") wantQuotes.add(r.params.symbol);
+    if ((r.type === "price_above" || r.type === "price_below") && r.params.symbol) addSym(r.params.symbol);
+    if (r.type === "pct_move_day" && r.params.scope === "symbol") addSym(r.params.symbol);
   }
   let watchRows = null, posRows = null;
   const needWatch = rules.some((r) => r.type === "pct_move_day" && r.params.scope === "watchlist");
@@ -144,7 +155,7 @@ async function evaluateRules() {
   for (const w of watchRows || []) wantQuotes.add(w.yahoo_symbol);
   for (const t of posRows || []) if (t.asset_type !== "option") wantQuotes.add(yahooSym(t));
   const quotes = wantQuotes.size ? await yahoo.quotes([...wantQuotes]).catch(() => ({})) : {};
-  const qOf = (sym) => quotes[sym] || quotes[sym + "-USD"] || null;
+  const qOf = (sym) => (!sym.includes("-") && quotes[sym + "-USD"]) || quotes[sym] || null;
 
   for (const rule of rules) {
     try {
@@ -202,7 +213,10 @@ async function evaluateRules() {
           const trades = await whales.politicianTrades(p.name);
           rule.state.seen = Array.isArray(rule.state.seen) ? rule.state.seen : null;
           const keys = trades.map((t) => `${t.ticker}|${t.action}|${t.traded_at}|${t.amount}`);
-          if (rule.state.seen === null) { rule.state.seen = keys.slice(0, 100); break; }   // first pass: baseline, no spam
+          // First pass with REAL data baselines silently (no spam for old filings). An
+          // empty/failed feed must NOT baseline — it would make every existing filing
+          // look "new" once the provider recovers.
+          if (rule.state.seen === null) { if (trades.length) rule.state.seen = keys.slice(0, 100); break; }
           const fresh = trades.filter((t, i) => !rule.state.seen.includes(keys[i]));
           for (const t of fresh.slice(0, 5)) {
             fired += await fire(rule, keys[trades.indexOf(t)],
@@ -241,4 +255,4 @@ async function evaluateRules() {
   return { evaluated: rules.length, fired };
 }
 
-module.exports = { listRules, saveRules, validateRule, evaluateRules, fire, drainDigest, label, RULE_TYPES };
+module.exports = { listRules, saveRules, validateRule, evaluateRules, fire, drainDigest, peekDigest, clearDigest, label, RULE_TYPES };
