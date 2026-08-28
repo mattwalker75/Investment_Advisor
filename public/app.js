@@ -701,6 +701,7 @@ async function loadPerformance() {
     ${T.by_term ? `<div class="tile"><div class="v ${cls(T.by_term.short.pnl)}">$${fmtP(T.by_term.short.pnl, 0)}</div><div class="l">short-term P&L (${T.by_term.short.count})</div></div>
     <div class="tile"><div class="v ${cls(T.by_term.long.pnl)}">$${fmtP(T.by_term.long.pnl, 0)}</div><div class="l">long-term P&L (${T.by_term.long.count})</div></div>` : ""}`;
   loadEquityCurve();
+  labRefreshSaved();
 }
 
 // Equity curves: realized account curve + the "what if I took every rec" paper curve.
@@ -777,6 +778,97 @@ $("bt-run").addEventListener("click", async () => {
         <td class="mono ${cls(x.total_pnl_pct)}">${fmtPct(x.total_pnl_pct)}</td></tr>`).join("")}</tbody></table>`;
   } catch (e) { $("bt-note").textContent = "✗ " + e.message; }
   finally { btn.disabled = false; }
+});
+
+/* ---------- strategy lab ---------- */
+// Tiny markdown-lite renderer for the AI critique (bold + line breaks only, escaped).
+function mdLite(text) {
+  return esc(text).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/\n/g, "<br>");
+}
+async function labRefreshSaved() {
+  try {
+    const list = await api("/api/strategies");
+    $("lab-saved").innerHTML = '<option value="">—</option>' + list.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
+  } catch (_) {}
+}
+function labSpec() {
+  const t = $("lab-spec").value.trim();
+  if (!t) return null;
+  try { return JSON.parse(t); } catch (e) { throw new Error("spec JSON is invalid: " + e.message); }
+}
+async function labCompile() {
+  const description = $("lab-desc").value.trim();
+  if (!description) { $("lab-note").textContent = "describe the strategy first"; return null; }
+  $("lab-note").textContent = "compiling…";
+  const r = await api("/api/strategy/compile", { method: "POST", body: JSON.stringify({ description }) });
+  $("lab-spec").value = JSON.stringify(r.spec, null, 2);
+  $("lab-spec-box").open = true;
+  $("lab-note").textContent = r.notes ? "⚠ " + r.notes : "✓ compiled — review the spec, then Run";
+  return r.spec;
+}
+$("lab-compile").addEventListener("click", () => labCompile().catch((e) => { $("lab-note").textContent = "✗ " + e.message; }));
+$("lab-run").addEventListener("click", async () => {
+  const btn = $("lab-run");
+  btn.disabled = true;
+  try {
+    let spec = labSpec();
+    if (!spec) spec = await labCompile();
+    if (!spec) return;
+    $("lab-note").textContent = "running… (~5-60s)";
+    const r = await api("/api/strategy/run" + ($("lab-critique").checked ? "?critique=1" : ""), { method: "POST", body: JSON.stringify({ spec }) });
+    $("lab-note").textContent = "";
+    $("lab-spec").value = JSON.stringify(r.spec, null, 2);
+    const O = r.overall || {};
+    const wf = r.walk_forward;
+    const wfRow = (label, m) => `<tr><td>${label}</td><td class="mono">${m.trades}</td>
+      <td class="mono">${m.win_rate ?? "—"}%</td><td class="mono ${cls(m.expectancy_pct)}">${fmtPct(m.expectancy_pct)}</td>
+      <td class="mono">${m.profit_factor ?? "—"}</td><td class="mono down">−${m.max_drawdown_pct ?? "—"}%</td></tr>`;
+    $("lab-results").innerHTML = r.total_trades ? `
+      <div class="tiles" style="margin-top:8px">
+        <div class="tile"><div class="v">${r.total_trades}</div><div class="l">sim trades</div></div>
+        <div class="tile"><div class="v ${O.win_rate >= 50 ? "up" : "down"}">${O.win_rate ?? "—"}%</div><div class="l">win rate</div></div>
+        <div class="tile"><div class="v ${cls(O.expectancy_pct)}">${fmtPct(O.expectancy_pct)}</div><div class="l">expectancy / trade</div></div>
+        <div class="tile"><div class="v">${O.profit_factor ?? "—"}</div><div class="l">profit factor</div></div>
+        <div class="tile"><div class="v down">−${O.max_drawdown_pct ?? "—"}%</div><div class="l">max drawdown</div></div>
+        <div class="tile"><div class="v">${r.symbols_with_trades}/${r.symbols_tested}</div><div class="l">symbols traded</div></div>
+      </div>
+      ${wf ? `<table class="grid" style="margin-top:8px"><thead><tr><th>Window</th><th>Trades</th><th>Win rate</th><th>Expectancy</th><th>PF</th><th>Max DD</th></tr></thead>
+        <tbody>${wfRow("In-sample (older)", wf.in_sample)}${wfRow(`Out-of-sample (since ${wf.cutoff_date})`, wf.out_of_sample)}</tbody></table>` : ""}
+      <div class="hint">Exits: ${Object.entries(r.exit_reasons || {}).map(([k, v]) => `${k} ×${v}`).join(" · ")}${r.model_priced_note ? "<br>⚠ " + esc(r.model_priced_note) : ""}${r.intraday_note ? "<br>⚠ " + esc(r.intraday_note) : ""}</div>
+      <table class="grid" style="margin-top:8px"><thead><tr><th>Symbol</th><th>Trades</th><th>Win rate</th><th>Avg</th><th>Total</th></tr></thead>
+      <tbody>${r.by_symbol.filter((x) => x.trades > 0).slice(0, 12).map((x) => `<tr>
+        <td class="mono"><b>${esc(x.symbol)}</b></td><td class="mono">${x.trades}</td>
+        <td class="mono">${x.win_rate ?? "—"}%</td>
+        <td class="mono ${cls(x.avg_pnl_pct)}">${fmtPct(x.avg_pnl_pct)}</td>
+        <td class="mono ${cls(x.total_pnl_pct)}">${fmtPct(x.total_pnl_pct)}</td></tr>`).join("")}</tbody></table>
+      ${r.critique ? `<div class="briefing" style="margin-top:10px">${mdLite(r.critique)}</div>` : ""}`
+      : '<div class="hint">No trades fired — the entry conditions never lined up on this universe/window. Loosen a threshold or widen the window.</div>';
+  } catch (e) { $("lab-note").textContent = "✗ " + e.message; }
+  finally { btn.disabled = false; }
+});
+$("lab-save").addEventListener("click", async () => {
+  try {
+    const spec = labSpec();
+    if (!spec) { $("lab-note").textContent = "compile or paste a spec first"; return; }
+    if ($("lab-name").value.trim()) spec.name = $("lab-name").value.trim();
+    await api("/api/strategies", { method: "PUT", body: JSON.stringify({ spec }) });
+    $("lab-note").textContent = `✓ saved "${spec.name}"`;
+    labRefreshSaved();
+  } catch (e) { $("lab-note").textContent = "✗ " + e.message; }
+});
+$("lab-load").addEventListener("click", async () => {
+  const name = $("lab-saved").value;
+  if (!name) return;
+  const list = await api("/api/strategies").catch(() => []);
+  const s = list.find((x) => x.name === name);
+  if (s) { $("lab-spec").value = JSON.stringify(s, null, 2); $("lab-spec-box").open = true; $("lab-name").value = s.name; }
+});
+$("lab-del").addEventListener("click", async () => {
+  const name = $("lab-saved").value;
+  if (!name) return;
+  if (!await confirmDialog({ title: `Delete strategy "${name}"?`, confirmText: "Delete" })) return;
+  await api("/api/strategies/" + encodeURIComponent(name), { method: "DELETE" });
+  labRefreshSaved();
 });
 
 /* ---------- charts ---------- */
@@ -860,10 +952,42 @@ $("chart-clearlines").addEventListener("click", () => {
   drawUserLevels();
 });
 
+/* ---------- projection cone (predictive analysis) ---------- */
+// Quantile bands from realized volatility, drawn beyond the last candle. The bands
+// WIDEN with the horizon by design — this is a probability range, not a forecast.
+let predSeries = [];
+function predOptions() {
+  const intraday = curDays <= 10;
+  const opts = intraday ? ["1h", "4h", "1d"] : ["1w", "1m", "3m", "6m", "1y"];
+  $("pred-h").innerHTML = '<option value="">🔮 cone…</option>' + opts.map((h) => `<option value="${h}">🔮 ${h}</option>`).join("");
+}
+function clearPrediction() {
+  predSeries.forEach((s) => { try { chart.removeSeries(s); } catch (_) {} });
+  predSeries = [];
+}
+$("pred-h").addEventListener("change", async () => {
+  clearPrediction();
+  const h = $("pred-h").value;
+  if (!h || !chartData) return;
+  try {
+    const interval = curDays <= 10 ? "1h" : "1d";
+    const cone = await api(`/api/predict/${encodeURIComponent(curSymbol)}?horizon=${h}&interval=${interval}`);
+    const draw = (band, color, w, style) => {
+      const s = chart.addLineSeries({ color, lineWidth: w, lineStyle: style ?? 0, priceLineVisible: false, lastValueVisible: false });
+      s.setData(cone.bands[band]); predSeries.push(s);
+    };
+    draw("p10", "rgba(56,189,248,.35)", 1); draw("p90", "rgba(56,189,248,.35)", 1);
+    draw("p25", "rgba(56,189,248,.65)", 1); draw("p75", "rgba(56,189,248,.65)", 1);
+    draw("p50", "#fbbf24", 1.4, 2);
+    $("chart-info").textContent = `${curSymbol} · 🔮 ${h} cone: p10 ${fmtP(cone.at_horizon.p10)} · median ${fmtP(cone.at_horizon.p50)} · p90 ${fmtP(cone.at_horizon.p90)} (80% range spans ${cone.band_width_pct}%) · vol ${cone.params.sigma_annual_pct}%/yr — probability range, not a forecast`;
+  } catch (e) { $("chart-info").textContent = "⚠ cone failed — " + e.message; }
+});
+
 async function loadChart(symbol) {
   curSymbol = symbol.toUpperCase();
   $("chart-symbol").value = curSymbol;
   $("chart-info").textContent = "loading…";
+  clearPrediction(); predOptions();          // cone is per-symbol/range — reset it
   try {
     chartData = await api(`/api/chart/${encodeURIComponent(curSymbol)}?days=${curDays}`);
   } catch (e) {
@@ -1127,7 +1251,7 @@ async function loadSettings() {
     <div class="frow check vgroup"><input type="checkbox" id="v-tab-watchlist" ${s.view.tabs.watchlist !== false ? "checked" : ""}><label for="v-tab-watchlist"><b>Watchlist</b></label></div>
     <div class="frow check vgroup"><input type="checkbox" id="v-tab-trades" ${s.view.tabs.trades !== false ? "checked" : ""}><label for="v-tab-trades"><b>Trades</b></label></div>
     <div class="frow check vgroup"><input type="checkbox" id="v-tab-performance" ${s.view.tabs.performance !== false ? "checked" : ""}><label for="v-tab-performance"><b>Performance</b></label></div>
-    ${Object.entries({ rec_performance: "Recommendation performance", your_trades: "Your trades", equity: "Equity curve", calibration: "Confidence calibration", backtest: "Threshold backtest" }).map(([k, label]) =>
+    ${Object.entries({ rec_performance: "Recommendation performance", your_trades: "Your trades", equity: "Equity curve", calibration: "Confidence calibration", backtest: "Threshold backtest", strategy_lab: "Strategy Lab" }).map(([k, label]) =>
       `<div class="frow check sub-check"><input type="checkbox" id="v-perf-${k}" ${s.view.performance[k] !== false ? "checked" : ""}><label for="v-perf-${k}">${label}</label></div>`).join("")}
     <div class="save-row"><button class="primary" id="save-view">Save</button><span id="note-view"></span></div>
   </div>
@@ -1285,7 +1409,7 @@ async function loadSettings() {
       await api("/api/settings/view", { method: "PUT", body: JSON.stringify({
         tabs: pick("v-tab-", ["recommendations", "charts", "watchlist", "trades", "performance"]),
         dashboard: pick("v-dash-", ["briefing", "sentiment", "success", "latest_recs", "headlines", "activity"]),
-        performance: pick("v-perf-", ["rec_performance", "your_trades", "equity", "calibration", "backtest"]),
+        performance: pick("v-perf-", ["rec_performance", "your_trades", "equity", "calibration", "backtest", "strategy_lab"]),
       }) });
       await loadAppSettings(); applyView();
       note("note-view", "Saved ✓ — view updated");
@@ -1499,7 +1623,7 @@ chatText.addEventListener("keydown", (e) => {
 const VIEW_MAP = {
   tabs: { recommendations: "recs", charts: "charts", watchlist: "watchlist", trades: "trades", performance: "performance" },
   dashboard: { briefing: "card-briefing", sentiment: "card-sentiment", success: "card-success", latest_recs: "card-latest", headlines: "card-news", activity: "card-events" },
-  performance: { rec_performance: "card-perf-recs", your_trades: "card-perf-trades", equity: "card-perf-equity", calibration: "card-perf-cal", backtest: "card-perf-bt" },
+  performance: { rec_performance: "card-perf-recs", your_trades: "card-perf-trades", equity: "card-perf-equity", calibration: "card-perf-cal", backtest: "card-perf-bt", strategy_lab: "card-perf-lab" },
 };
 function applyView() {
   const v = appSettings && appSettings.view;

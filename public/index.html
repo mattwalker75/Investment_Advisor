@@ -140,6 +140,7 @@
           title="Overlay another symbol for relative comparison — both scale as % change. Enter to apply, empty + Enter to remove.">
         <button class="chip" id="chart-drawline" title="Click the chart to drop a horizontal price level (saved per symbol)">✏ Level</button>
         <button class="ghost small" id="chart-clearlines" title="Remove your drawn levels for this symbol">✖ levels</button>
+        <select id="pred-h" class="short-in" style="width:auto" title="Projection cone: the statistically likely price range at a horizon — bands WIDEN with time (probability range, not a forecast)"></select>
         <span class="hint" id="chart-info"></span>
       </div>
       <div id="chart-main" class="chartbox"></div>
@@ -212,6 +213,24 @@
             <label>Slippage %</label><input id="bt-slip" type="number" min="0" max="2" step="0.05" value="0.1" class="short-in">
             <button id="bt-run" class="ghost">Run backtest</button><span class="hint" id="bt-note"></span></div>
           <div id="bt-results"></div>
+        </div>
+        <div class="card wide" id="card-perf-lab">
+          <h3>🧪 Strategy Lab <span class="hint-inline">— describe YOUR strategy in plain English, test it, get honest feedback</span></h3>
+          <div class="frow"><textarea id="lab-desc" style="flex:1;min-height:60px" placeholder="e.g. Buy when RSI dips under 30 while the 50-day is above the 200-day; stop 2×ATR; sell half at 2R and trail the rest with 3×ATR. (Also works: short-side, crypto universe, or long calls instead of shares.)"></textarea></div>
+          <div class="frow">
+            <button id="lab-compile" class="ghost">⚙ Compile</button>
+            <button id="lab-run" class="primary">▶ Run</button>
+            <input type="checkbox" id="lab-critique" checked><label for="lab-critique">AI feedback</label>
+            <input id="lab-name" class="short-in" placeholder="save as…" style="width:140px">
+            <button id="lab-save" class="ghost small">💾 Save</button>
+            <span class="hint" id="lab-note"></span>
+          </div>
+          <details id="lab-spec-box" style="margin:6px 0 8px"><summary class="hint">Compiled spec (editable JSON — what actually runs; nothing hidden)</summary>
+            <textarea id="lab-spec" style="width:100%;min-height:130px;font-family:monospace;font-size:.8rem"></textarea></details>
+          <div class="frow"><label>Saved strategies</label><select id="lab-saved" style="min-width:160px"><option value="">—</option></select>
+            <button id="lab-load" class="ghost small">Load</button>
+            <button id="lab-del" class="ghost small" title="Delete the selected saved strategy">✖</button></div>
+          <div id="lab-results"></div>
         </div>
       </div>
     </section>

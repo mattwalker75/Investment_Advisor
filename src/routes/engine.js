@@ -45,6 +45,49 @@ router.post("/backtest", async (req, res) => {
   } catch (e) { res.status(502).json({ error: e.message }); }
 });
 
+// ---------- Strategy Lab ----------
+// Compile plain English → spec (shown to the user before running — nothing hidden).
+router.post("/strategy/compile", async (req, res) => {
+  try {
+    const description = String((req.body && req.body.description) || "").trim();
+    if (!description) return res.status(400).json({ error: "description required" });
+    res.json(await require("../engine/strategylab").compileStrategy(description));
+  } catch (e) { res.status(422).json({ error: e.message }); }
+});
+// Run a spec; ?critique=1 adds the AI feedback (a second model call).
+router.post("/strategy/run", async (req, res) => {
+  try {
+    const lab = require("../engine/strategylab");
+    const results = await lab.runStrategy(req.body && req.body.spec);
+    if (req.query.critique && results.total_trades > 0) {
+      try { results.critique = await lab.critiqueStrategy(results.spec, results); }
+      catch (e) { results.critique = "(AI feedback unavailable: " + e.message + ")"; }
+    }
+    res.json(results);
+  } catch (e) { res.status(422).json({ error: e.message }); }
+});
+router.get("/strategies", async (_req, res) => {
+  res.json(await require("../engine/strategylab").listStrategies());
+});
+router.put("/strategies", async (req, res) => {
+  try { res.json(await require("../engine/strategylab").saveStrategy(req.body && req.body.spec)); }
+  catch (e) { res.status(422).json({ error: e.message }); }
+});
+router.delete("/strategies/:name", async (req, res) => {
+  res.json(await require("../engine/strategylab").deleteStrategy(String(req.params.name)));
+});
+
+// ---------- Predictive analysis: the projection cone ----------
+router.get("/predict/:symbol", async (req, res) => {
+  try {
+    const a = await require("../resolve").resolveAsset(req.params.symbol, req.query.asset_type);
+    if (!a) return res.status(400).json({ error: "symbol required" });
+    const cone = await require("../engine/predict").projectionCone(a.yahoo, String(req.query.horizon || "1m"),
+      { interval: req.query.interval === "1h" ? "1h" : "1d" });
+    res.json({ ...cone, display: a.display, asset_type: a.asset_type });
+  } catch (e) { res.status(422).json({ error: e.message }); }
+});
+
 // ---------- Advisor chat (tool-calling conversation over all the tool's data) ----------
 router.post("/advisor-chat", async (req, res) => {
   try {

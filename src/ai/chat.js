@@ -135,6 +135,14 @@ const TOOL_DEFS = [
     { symbol: { type: "string" },
       view: { type: "string", enum: ["bullish", "bearish", "neutral_income"], description: "your directional read; neutral_income = premium selling; omit to let the analysis decide" },
       save: { type: "boolean", description: "persist as a tracked recommendation (default false)" } }, ["symbol"]),
+  T("run_strategy", "Test the USER'S OWN trading strategy: describe it in plain English (it is compiled to a strict spec — ALWAYS show the returned spec to the user so they can confirm the translation) or pass the name of a saved strategy. Runs a full simulation (gap-aware fills, slippage, walk-forward split) and returns the metrics — then YOU write the critique: verdict grounded in expectancy/profit factor/drawdown/sample size, what works vs hurts (exit-reason mix, per-symbol spread, in-sample vs out-of-sample gap = curve-fit warning), and 1-2 concrete parameter changes to try. save_as persists the compiled spec under that name. Takes several seconds per symbol.",
+    { description: { type: "string", description: "the strategy in plain English (or omit and use name)" },
+      name: { type: "string", description: "a saved strategy's name to run" },
+      symbols: { type: "array", items: { type: "string" }, description: "optional universe override, up to 10 symbols" },
+      save_as: { type: "string", description: "save the compiled spec under this name" } }),
+  T("get_prediction", "PROJECTION CONE for a stock or crypto at a horizon (1h 4h 1d 1w 1m 3m 6m 1y): statistically likely price range from realized volatility — quantile bands (p10/p25/p50/p75/p90) that WIDEN with time. This is a probability range, NOT a directional forecast: when you add your directional lean, state it WITH your confidence and always cite the band width honestly (e.g. 'the 90% range at 3 months spans X–Y; my lean is mildly higher because…'). Consider get_analysis + get_news for the qualitative side.",
+    { symbol: { type: "string" }, horizon: { type: "string", enum: ["1h", "4h", "1d", "1w", "1m", "3m", "6m", "1y"], description: "default 1m" },
+      asset_type: { type: "string", enum: ["stock", "crypto"] } }, ["symbol"]),
   T("manage_memory", "Durable memory across conversations. action 'add' saves a short note (stable user preferences, goals, standing context — e.g. 'prefers 3-6 month holds', 'wants out of airlines'); 'remove' deletes by id; 'list' shows all. Your current notes are already in the system prompt. Save sparingly — only stable, genuinely useful facts.",
     { action: { type: "string", enum: ["add", "remove", "list"] }, note: { type: "string" }, id: { type: "string" } }, ["action"]),
 ];
@@ -390,6 +398,39 @@ async function execTool(name, args = {}) {
       }
       return { play, note: "NOT saved. If the user wants it tracked, call again with save:true." };
     }
+    case "run_strategy": {
+      const lab = require("../engine/strategylab");
+      let spec;
+      if (args.name) {
+        const saved = (await lab.listStrategies()).find((x) => x.name === String(args.name));
+        if (!saved) return { error: `no saved strategy named "${args.name}" — saved: ${(await lab.listStrategies()).map((x) => x.name).join(", ") || "(none)"}` };
+        spec = saved;
+      } else if (args.description) {
+        const compiled = await lab.compileStrategy(String(args.description));
+        spec = compiled.spec;
+        spec._compile_notes = compiled.notes;
+      } else return { error: "give either a plain-English description or a saved strategy name" };
+      if (Array.isArray(args.symbols) && args.symbols.length) spec.universe = args.symbols.slice(0, 10).map(String);
+      else if (spec.universe === "stocks") spec.universe = "stocks";   // runner caps at 25; chat stays snappy via override
+      const notes = spec._compile_notes; delete spec._compile_notes;
+      const results = await lab.runStrategy(spec);
+      if (args.save_as) {
+        await lab.saveStrategy({ ...results.spec, name: String(args.save_as).slice(0, 60) });
+        results.saved_as = String(args.save_as).slice(0, 60);
+      }
+      if (notes) results.compile_notes = notes;
+      // strip per-trade detail to keep the tool result lean; the model critiques from the aggregates
+      for (const b of results.by_symbol || []) delete b.last_trades;
+      return results;
+    }
+    case "get_prediction": {
+      const a = await resolveAsset(args.symbol, args.asset_type);
+      if (!a) return { error: "symbol required" };
+      const cone = await require("../engine/predict").projectionCone(a.yahoo, String(args.horizon || "1m"));
+      // The full band series is chart material; the model needs the endpoints + params.
+      return { symbol: a.display, asset_type: a.asset_type, horizon: cone.horizon, price: cone.price,
+        at_horizon: cone.at_horizon, band_width_pct: cone.band_width_pct, params: cone.params, note: cone.note };
+    }
     case "get_economic_calendar": return await require("../providers/calendar").economicCalendar(args.days || 7);
     case "manage_memory": {
       const notes = await loadNotes();
@@ -429,7 +470,7 @@ HOW TO WORK:
 - USE YOUR TOOLS. Never guess a price, indicator value, or portfolio fact — fetch it. For "what do you think of X?" call get_analysis (and usually get_news + get_quote) first. For "X vs Y" use compare_symbols.
 - STOCKS AND CRYPTO are both first-class. get_quote/get_analysis/get_news accept either ("NVDA", "BTC", "bitcoin", "SOL"...) — pass asset_type to disambiguate colliding tickers. Options are stock-only; smart-money (congress/13F) is stock-only; get_crypto_universe lists the top coins.
 - Respect the user's preferences (get_preferences) — asset classes, risk tolerance (currently: ${s.preferences.risk.risk_tolerance}), options comfort${s.preferences.risk.allow_shorts === false ? ", and the user does NOT short — long ideas only (save_recommendation will reject side:'sell')" : ""}. Don't suggest what they've excluded.
-- REAL ENGINES over ad-hoc opinion: "should I still hold X?" → check_position_health; "is that idea still good?" → revalidate_recommendation; "do my thresholds actually work?" → run_backtest; "am I too concentrated?" → get_portfolio_concentration; "anything big this week?" → get_economic_calendar; "what's a good options play on X?" → suggest_options_play (chain-validated, premium-denominated${s.preferences.options.enabled ? "" : " — currently DISABLED in the user's preferences"}).
+- REAL ENGINES over ad-hoc opinion: "should I still hold X?" → check_position_health; "is that idea still good?" → revalidate_recommendation; "do my thresholds actually work?" → run_backtest; "am I too concentrated?" → get_portfolio_concentration; "anything big this week?" → get_economic_calendar; "what's a good options play on X?" → suggest_options_play (chain-validated, premium-denominated${s.preferences.options.enabled ? "" : " — currently DISABLED in the user's preferences"}); "test MY strategy: …" → run_strategy (show the compiled spec back, then critique the results yourself); "where will X be in 3 months?" → get_prediction (a probability cone — give your lean WITH confidence, never as certainty).
 - When you recommend a trade idea, give the full structure: entry zone, stop loss, laddered targets with sell percentages, rough time horizon, and WHY — grounded in the data you fetched.
 - When the user asks you to CREATE/LOG/TRACK a trade idea, you MUST call save_recommendation — that is the ONLY way an idea reaches the Recommendations tab and gets tracked. NEVER claim an idea is saved or "being tracked" unless the tool returned saved:true. If validation rejects it, fix the levels (usually the reward:risk ratio) and try once more, or tell the user why it can't stand.
 - WRITE ACTIONS need consent: confirm with the user before manage_watchlist remove and ALWAYS before update_trade (state the exact new levels first). Never claim a write happened unless the tool returned ok:true.
